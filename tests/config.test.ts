@@ -39,6 +39,7 @@ describe("config", () => {
     expect(config.headless).toBe(false);
     expect(config.timeoutMs).toBe(45_000);
     expect(config.stableMs).toBe(7_000);
+    expect(config.maxAssetBytes).toBe(25 * 1024 * 1024);
   });
 
   it("allows the caller to force headed login independently of env", () => {
