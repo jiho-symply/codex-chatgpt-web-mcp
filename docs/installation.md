@@ -91,7 +91,13 @@ For UI-only configuration:
 
 ## Windows
 
-CGW searches for Microsoft Edge first, then Google Chrome. No WSL is required.
+CGW first checks Windows' default HTTPS browser. If the default is Google Chrome
+or Microsoft Edge, CGW uses that browser first. If the default browser is not a
+supported Chromium browser or cannot be detected, CGW falls back to installed
+Chrome/Edge.
+
+CGW uses its own persistent automation profile, so this chooses the browser
+application (Chrome vs Edge), not your normal browser profile. No WSL is required.
 
 ## Linux
 
