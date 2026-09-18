@@ -670,20 +670,11 @@ export class ChatGptWebClient {
     let page: Page;
     let expectedProjectId: string | null = null;
     if (input.workspaceId) {
-      const binding = this.projectManager.getBinding(input.workspaceId);
-      if (binding.status !== "ready" || !binding.memoryVerifiedAt || binding.memoryMode !== "project-only") {
-        throw new WorkspaceProjectError(
-          "PROJECT_MEMORY_UNVERIFIED",
-          "Workspace ChatGPT Project is not verified for Project-only memory."
-        );
-      }
-      expectedProjectId = binding.projectId;
+      const verified = await this.projectManager.verifyProjectOnlyMemory(input.workspaceId);
+      expectedProjectId = verified.binding.projectId;
+      page = verified.page;
       if (input.conversationId) {
-        page = await this.runtime.page();
         await this.navigate(page, input.conversationId, expectedProjectId);
-      } else {
-        const opened = await this.projectManager.openBoundProject(input.workspaceId);
-        page = opened.page;
       }
     } else {
       page = await this.runtime.page();
