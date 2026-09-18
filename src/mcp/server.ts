@@ -11,6 +11,8 @@ import {
 import { TurnManager, type TurnView } from "../turns/manager.js";
 import { AssetStoreError } from "../assets/store.js";
 import { TurnStore, TurnStoreError } from "../turns/store.js";
+import { InputStoreError } from "../inputs/store.js";
+import { InputPolicyError } from "../inputs/policy.js";
 import { SerialQueue } from "../util/serial.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 
@@ -45,6 +47,8 @@ function mapError(error: unknown): ToolResult {
   if (error instanceof BrowserRuntimeError) return fail(error.code, error.message);
   if (error instanceof TurnStoreError) return fail(error.code, error.message);
   if (error instanceof AssetStoreError) return fail(error.code, error.message);
+  if (error instanceof InputStoreError) return fail(error.code, error.message);
+  if (error instanceof InputPolicyError) return fail(error.code, error.message);
   return fail("INTERNAL_ERROR", error instanceof Error ? error.message : String(error));
 }
 
@@ -129,6 +133,18 @@ const manifestSchema = z.object({
   structured: z.boolean(),
   assetCount: z.number().int().nonnegative(),
   codeBlockCount: z.number().int().nonnegative(),
+});
+
+const inputAssetSchema = z.object({
+  inputAssetId: z.string(),
+  kind: z.enum(["text", "document", "data", "image"]),
+  filename: z.string(),
+  mime: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  sha256: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  status: z.enum(["staged", "expired"]),
 });
 
 const turnStatusSchema = z.enum([
@@ -250,19 +266,130 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
   );
 
   server.registerTool(
+    "chatgpt_stage_text",
+    {
+      title: "Stage explicit text input for ChatGPT",
+      description:
+        "Store caller-provided UTF-8 text in the proxy's private input staging area. " +
+        "This does not read any local path and does not upload anything to ChatGPT yet. " +
+        "Credential-like filenames/content and archives/executables are rejected. Staged inputs expire automatically.",
+      inputSchema: {
+        filename: z.string().min(1).max(180),
+        content: z.string().max(4_194_304),
+        mime: z.string().min(1).max(120).optional(),
+      },
+      outputSchema: inputAssetSchema.shape,
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args) => {
+      try {
+        return ok(
+          client.stageTextInput({
+            filename: args.filename,
+            content: args.content,
+            ...(args.mime ? { mime: args.mime } : {}),
+          })
+        );
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_stage_blob",
+    {
+      title: "Stage explicit binary input for ChatGPT",
+      description:
+        "Store caller-provided base64 bytes in private input staging. No filesystem path is accepted. " +
+        "Only supported PDF/Office/image types are allowed; archives, executables, unknown binary, and credential-like filenames are rejected. " +
+        "Nothing is uploaded until a later chatgpt_send/chatgpt_chat references the returned input_asset_id.",
+      inputSchema: {
+        filename: z.string().min(1).max(180),
+        mime: z.string().min(1).max(120),
+        data_base64: z.string().min(4).max(30_000_000),
+      },
+      outputSchema: inputAssetSchema.shape,
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args) => {
+      try {
+        return ok(
+          client.stageBlobInput({
+            filename: args.filename,
+            mime: args.mime,
+            dataBase64: args.data_base64,
+          })
+        );
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_list_staged_inputs",
+    {
+      title: "List private staged ChatGPT inputs",
+      description:
+        "List active caller-provided inputs in the proxy's private staging area. " +
+        "Expired inputs are cleaned automatically. No workspace files are discovered or listed.",
+      inputSchema: {},
+      outputSchema: {
+        inputs: z.array(inputAssetSchema),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      try {
+        return ok({ inputs: client.listStagedInputs() });
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_discard_staged_input",
+    {
+      title: "Discard a private staged ChatGPT input",
+      description:
+        "Delete one previously staged input from the proxy's private state. " +
+        "This does not delete anything from a workspace or from ChatGPT after it has already been uploaded.",
+      inputSchema: {
+        input_asset_id: z.string().regex(/^input_[a-f0-9]{24}$/),
+      },
+      outputSchema: {
+        inputAssetId: z.string(),
+        discarded: z.boolean(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    async (args) => {
+      try {
+        return ok(client.discardStagedInput(args.input_asset_id));
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
     "chatgpt_send",
     {
       title: "Send ChatGPT Web turn",
       description:
         "Send one prompt without waiting for the full answer. request_id is an idempotency key: " +
         "repeating the same request_id with identical inputs never sends a duplicate message. " +
-        "Use chatgpt_wait/get_reply for long responses.",
+        "Use chatgpt_wait/get_reply for long responses. " +
+        "Optional input_asset_ids upload only explicitly staged content; uploaded attachments may be retained by ChatGPT according to the user's account/service settings.",
       inputSchema: {
         request_id: z.string().min(8).max(128),
         prompt: z.string().min(1),
         conversation_id: z.string().min(8).max(128).optional(),
         model: z.string().min(1).max(200).optional(),
         effort: z.string().min(1).max(200).optional(),
+        input_asset_ids: z.array(z.string().regex(/^input_[a-f0-9]{24}$/)).max(10).optional(),
       },
       outputSchema: turnViewSchema,
       annotations: { readOnlyHint: false, destructiveHint: false },
@@ -277,6 +404,7 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
               ...(args.conversation_id ? { conversationId: args.conversation_id } : {}),
               ...(args.model ? { model: args.model } : {}),
               ...(args.effort ? { effort: args.effort } : {}),
+              ...(args.input_asset_ids ? { inputAssetIds: args.input_asset_ids } : {}),
             })
           )
         );
@@ -390,13 +518,16 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
       description:
         "Convenience wrapper that sends and waits in 30-second slices. " +
         "For long/high-reasoning tasks prefer chatgpt_send + chatgpt_wait. " +
-        "If the overall timeout expires, RESPONSE_TIMEOUT includes turn_id so the answer can be recovered.",
+        "If the overall timeout expires, RESPONSE_TIMEOUT includes turn_id so the answer can be recovered. " +
+        "input_asset_ids refer only to caller-staged content and cause those files to be uploaded to ChatGPT Web; " +
+        "the caller is responsible for account retention/privacy implications.",
       inputSchema: {
         prompt: z.string().min(1),
         request_id: z.string().min(8).max(128).optional(),
         conversation_id: z.string().min(8).max(128).optional(),
         model: z.string().min(1).max(200).optional(),
         effort: z.string().min(1).max(200).optional(),
+        input_asset_ids: z.array(z.string().regex(/^input_[a-f0-9]{24}$/)).max(10).optional(),
         timeout_ms: z.number().int().min(10_000).max(600_000).default(180_000),
       },
       outputSchema: {
@@ -422,6 +553,7 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
             ...(args.conversation_id ? { conversationId: args.conversation_id } : {}),
             ...(args.model ? { model: args.model } : {}),
             ...(args.effort ? { effort: args.effort } : {}),
+            ...(args.input_asset_ids ? { inputAssetIds: args.input_asset_ids } : {}),
           })
         );
 
