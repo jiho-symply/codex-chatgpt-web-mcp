@@ -8,6 +8,37 @@ export const PROMPT_SELECTORS = [
   "textarea[placeholder*=\"메시지\"]",
 ] as const;
 
+export const UPLOAD_INPUT_SELECTORS = [
+  'input[type="file"][data-testid*="file"]',
+  'input[type="file"][accept]',
+  'input[type="file"]',
+] as const;
+
+export const ATTACH_BUTTON_SELECTORS = [
+  'button[data-testid*="attach"]',
+  'button[data-testid*="upload"]',
+  'button[aria-label*="Attach" i]',
+  'button[aria-label*="Add files" i]',
+  'button[aria-label*="Upload" i]',
+  'button[aria-label*="첨부"]',
+  'button[aria-label*="파일"]',
+] as const;
+
+export const ATTACHMENT_CHIP_SELECTOR = [
+  '[data-testid*="attachment"]',
+  '[data-testid*="file-chip"]',
+  '[data-testid*="file-pill"]',
+  '[data-testid*="upload-preview"]',
+  '[aria-label*="attachment" i]',
+].join(", ");
+
+export const UPLOAD_BUSY_SELECTOR = [
+  '[data-testid*="upload"][aria-busy="true"]',
+  '[aria-label*="uploading" i]',
+  '[aria-label*="업로드 중"]',
+  'progress',
+].join(", ");
+
 export const SEND_BUTTON_SELECTORS = [
   "button[data-testid=\"send-button\"]",
   "button[aria-label*=\"Send\" i]",
