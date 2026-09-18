@@ -301,7 +301,7 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
     {
       title: "Stage explicit binary input for ChatGPT",
       description:
-        "Store caller-provided base64 bytes in private input staging. No filesystem path is accepted. " +
+        "Store caller-provided base64 bytes in private input staging. Best for small binary inputs; use create/commit blob slot for large files. No arbitrary filesystem path is accepted. " +
         "Only supported PDF/Office/image types are allowed; archives, executables, unknown binary, and credential-like filenames are rejected. " +
         "Nothing is uploaded until a later chatgpt_send/chatgpt_chat references the returned input_asset_id.",
       inputSchema: {
@@ -321,6 +321,69 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
             dataBase64: args.data_base64,
           })
         );
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_create_blob_slot",
+    {
+      title: "Create a one-time private binary input slot",
+      description:
+        "Create a short-lived empty file inside CGW private input staging for a large supported binary. " +
+        "The caller supplies filename, MIME, expected size, and SHA-256. The returned writePath is the only path CGW asks Codex to write. " +
+        "CGW does not read a caller-selected workspace path.",
+      inputSchema: {
+        filename: z.string().min(1).max(180),
+        mime: z.string().min(1).max(120),
+        size_bytes: z.number().int().min(1),
+        sha256: z.string().regex(/^[A-Fa-f0-9]{64}$/),
+      },
+      outputSchema: {
+        slotId: z.string(),
+        filename: z.string(),
+        mime: z.string(),
+        expectedSizeBytes: z.number().int().positive(),
+        expectedSha256: z.string(),
+        writePath: z.string(),
+        expiresAt: z.string(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args) => {
+      try {
+        return ok(
+          client.createBlobInputSlot({
+            filename: args.filename,
+            mime: args.mime,
+            sizeBytes: args.size_bytes,
+            sha256: args.sha256,
+          })
+        );
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_commit_blob_slot",
+    {
+      title: "Commit a one-time private binary input slot",
+      description:
+        "Validate the bytes written to a previously created CGW private blob slot. " +
+        "Exact size, SHA-256, MIME/extension and file signature are verified before it becomes an input_asset_id.",
+      inputSchema: {
+        slot_id: z.string().regex(/^slot_[a-f0-9]{24}$/),
+      },
+      outputSchema: inputAssetSchema.shape,
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args) => {
+      try {
+        return ok(client.commitBlobInputSlot(args.slot_id));
       } catch (error) {
         return mapError(error);
       }
