@@ -139,6 +139,26 @@ or if the selection cannot be verified, binding fails with
 
 CGW deliberately does not fall back to a default-memory Project.
 
+## Live memory-mode verification
+
+Project memory settings can be changed later in ChatGPT. Therefore a creation-time
+check is not treated as permanently sufficient.
+
+Before **every workspace send**, CGW reopens the exact bound Project, opens its
+Project settings, and verifies that the currently selected Memory mode is still
+Project-only. The local binding records the latest verification time and source.
+
+If settings cannot be opened, the memory control cannot be interpreted safely,
+or Project-only is not currently selected, the send fails before the prompt is
+submitted.
+
+CGW does not automatically switch a Project's memory setting during a send.
+
+ChatGPT may apply memory-setting changes asynchronously. A visible UI selection
+is the strongest state the Web proxy can verify; CGW cannot prove server-side
+propagation timing after a user manually changes settings. For the strongest
+isolation guarantee, do not manually toggle memory mode on CGW-managed Projects.
+
 ## Sending
 
 Version 0.5 requires `workspace_id` on sends by default.
