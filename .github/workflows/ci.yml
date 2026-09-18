@@ -21,5 +21,10 @@ jobs:
           node-version: "22"
 
       - run: npm install
+      - run: node bin/cgw.mjs --version
+      - name: Smoke test GitHub tarball npx install
+        env:
+          CGW_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npx -y "https://github.com/${GITHUB_REPOSITORY}/archive/${CGW_GIT_SHA}.tar.gz" --version
       - run: npm run typecheck
       - run: npm test

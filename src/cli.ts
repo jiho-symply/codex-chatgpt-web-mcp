@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { Command, InvalidArgumentError } from "commander";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { loadConfig, CHATGPT_ORIGIN } from "./config.js";
 import { BrowserRuntime } from "./browser/runtime.js";
+import { PROMPT_SELECTORS } from "./browser/selectors.js";
 import { ChatGptWebClient } from "./browser/chatgpt.js";
 import { TurnManager } from "./turns/manager.js";
 import { TurnStore } from "./turns/store.js";
@@ -32,6 +32,13 @@ function parseInteger(value: string): number {
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+async function hasVisibleComposer(page: Awaited<ReturnType<BrowserRuntime["page"]>>): Promise<boolean> {
+  for (const selector of PROMPT_SELECTORS) {
+    if (await page.locator(selector).first().isVisible().catch(() => false)) return true;
+  }
+  return false;
 }
 
 function hasInteractiveDisplay(): boolean {
@@ -68,7 +75,8 @@ program
 program
   .command("login")
   .description("Open a headed persistent browser for manual ChatGPT login")
-  .action(async () => {
+  .option("--timeout-ms <n>", "maximum time to wait for browser login", parseInteger, 600_000)
+  .action(async (opts: { timeoutMs: number }) => {
     if (!hasInteractiveDisplay()) {
       throw new Error(
         "No graphical display is available. Initial login requires a visible browser. " +
@@ -76,37 +84,37 @@ program
           "See docs/headless-linux.md."
       );
     }
-    if (!process.stdin.isTTY) {
-      throw new Error("cgw login requires an interactive terminal.");
-    }
 
-    await withContext(false, async (client, runtime) => {
+    await withContext(false, async (_client, runtime) => {
       const page = await runtime.page();
-      await page.goto(CHATGPT_ORIGIN, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await page.goto(CHATGPT_ORIGIN, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
 
-      const before = await client.status();
-      if (before.authenticated) {
+      if (await hasVisibleComposer(page)) {
         say("ChatGPT is already authenticated in this browser profile.");
         return;
       }
 
       say("Complete ChatGPT login in the opened browser.");
       say("Handle password, CAPTCHA, and 2FA directly on the website.");
-      say("This CLI never asks for or stores those credentials separately.");
+      say("CGW is waiting for the ChatGPT composer and never reads those credentials.");
 
-      const readline = createInterface({ input: process.stdin, output: process.stdout });
-      await new Promise<void>((resolve) => {
-        readline.question("Press Enter after the ChatGPT composer is visible... ", () => resolve());
-      });
-      readline.close();
-
-      const after = await client.status();
-      if (!after.authenticated) {
-        throw new Error(
-          "ChatGPT composer is still unavailable. Login may be incomplete or the UI may have changed."
-        );
+      const timeoutMs = Math.max(30_000, Math.min(900_000, opts.timeoutMs));
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (await hasVisibleComposer(page)) {
+          say("Authentication confirmed. The persistent profile is ready for headless use.");
+          return;
+        }
+        await page.waitForTimeout(750);
       }
-      say("Authentication confirmed. The persistent profile is ready for headless use.");
+
+      throw new Error(
+        "Timed out waiting for the ChatGPT composer. Login may be incomplete, " +
+          "the browser may be showing a challenge, or the Web UI may have changed."
+      );
     });
   });
 
