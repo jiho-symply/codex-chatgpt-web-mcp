@@ -1,5 +1,7 @@
 # Installation
 
+The normal install command is pinned to the immutable v0.8.1 commit `0790508bd9662c93ee917c419228d64b9192e749`. Do not replace it with `refs/heads/main.tar.gz`: `npx` keeps a separate execution cache and a floating URL can reuse stale package contents.
+
 Normal users do not need to clone, build, or install a Playwright browser.
 
 ## Requirements
@@ -30,10 +32,10 @@ Do not modify files in my current project.
 
 1. Check that Node.js >= 20 and a supported Edge/Chrome/Chromium browser are available.
 2. Run:
-   npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
+   npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login
    If ChatGPT login, CAPTCHA, or 2FA needs human interaction, stop and ask me to complete it in the opened browser.
 3. Register the MCP server with:
-   codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
+   codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz mcp
 4. Verify registration with:
    codex mcp list
 5. Do not clone/build the repository unless the documented npx path actually fails.
@@ -53,13 +55,13 @@ human steps are:
 ### 1. Sign in once
 
 ```bash
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login
 ```
 
 ### 2. Register with Codex
 
 ```bash
-codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
+codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz mcp
 ```
 
 Verify:
@@ -85,7 +87,7 @@ For UI-only configuration:
 
 1. Open Settings → MCP Servers.
 2. Add a local STDIO server named `chatgpt-web`.
-3. Command: `npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp`.
+3. Command: `npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz mcp`.
 4. On Windows, use `npx.cmd` if the UI cannot resolve `npx`.
 5. Save and restart the client.
 
@@ -139,13 +141,13 @@ npx playwright install chromium
 Check the saved ChatGPT session:
 
 ```bash
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz doctor
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz doctor
 ```
 
 Inspect model/effort choices:
 
 ```bash
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz models
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz models
 ```
 
 Remove from Codex:
@@ -166,3 +168,16 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+## npx cache note
+
+If you previously ran the old floating `main.tar.gz` command, that old package may still exist in the separate npx execution cache. The pinned command above does not need that cache to be cleared because it uses a different immutable URL.
+
+To remove old npx entries manually on Windows PowerShell:
+
+```powershell
+$npmCache = npm config get cache
+Remove-Item -LiteralPath (Join-Path $npmCache "_npx") -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+On newer npm versions, `npm cache npx ls` / `npm cache npx rm` may also be available.
