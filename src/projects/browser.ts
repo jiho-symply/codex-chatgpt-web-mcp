@@ -17,6 +17,7 @@ import {
 } from "./store.js";
 
 export type WorkspaceProjectErrorCode =
+  | "WORKSPACE_REQUIRED"
   | "PROJECT_CREATE_UNAVAILABLE"
   | "PROJECT_MEMORY_UNAVAILABLE"
   | "PROJECT_MEMORY_UNVERIFIED"
