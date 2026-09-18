@@ -62,7 +62,8 @@ origin.
 - **Fixed origin** — browser automation is restricted to `https://chatgpt.com`.
 - **Serialized requests** — one browser profile is used by one request at a
   time to prevent cross-conversation races.
-- **Bounded I/O** — prompt and response sizes are capped locally.
+- **Bounded I/O** — prompt, response, and explicitly retrieved asset sizes are capped locally.
+- **Private asset staging** — generated response assets are never downloaded to the workspace automatically.
 - **At-most-once sends** — request ids are persisted before browser dispatch so
   retries cannot duplicate prompts after transport/browser failures.
 - **Recoverable long turns** — turn metadata is stored outside the workspace;
@@ -94,6 +95,12 @@ prompt twice.
 `status=generating` if ChatGPT is still working. `chatgpt_get_reply` inspects
 the current reply without sending anything. `chatgpt_stop` stops only the
 known turn.
+
+### `chatgpt_get_asset`
+
+Retrieves a file/image that was already identified in a structured response
+manifest. Assets are staged under the proxy's private state directory, never
+written directly into the Codex workspace.
 
 ### `chatgpt_chat`
 
@@ -180,6 +187,40 @@ Codex remains the orchestrator:
 
 ChatGPT does not need to know that Codex is the caller.
 
+## Structured responses
+
+Completed/in-progress turn results may include a `manifest` that preserves
+response structure instead of flattening everything into one string.
+
+Supported parts:
+
+- plain text
+- code blocks with language metadata
+- writing/artifact blocks
+- tables
+- citations
+- generated/downloadable files
+- images
+- preview surfaces
+
+The original `response` string remains for compatibility. Codex should prefer
+structured `code` parts when applying/reviewing code.
+
+Generated files/images are represented by opaque `assetId` values. Retrieval
+is explicit via `chatgpt_get_asset`; assets are staged privately with filename,
+size, MIME hint and SHA-256 metadata.
+
+See [docs/response-manifest.md](docs/response-manifest.md).
+
+## Explicit Web UI state
+
+`chatgpt_status` and turn results expose a normalized UI state:
+`ready`, `generating`, `paused`, `auth_required`,
+`challenge_required`, `rate_limited`, `remote_error`, or `unknown`.
+
+Retry/Regenerate/Continue controls are detected but never clicked
+automatically. See [docs/web-ui-state.md](docs/web-ui-state.md).
+
 ## Model and effort selection
 
 Use the live account-specific picker:
@@ -217,6 +258,8 @@ methods for the first login, then remove the display service.
 | `CGW_BROWSER_CHANNEL` | bundled Chromium | Optional Playwright browser channel such as `chrome` |
 | `CGW_TIMEOUT_MS` | `180000` | Default ChatGPT generation timeout |
 | `CGW_STABLE_MS` | `5000` | Fallback text-stability interval used when no Copy control is detectable |
+
+Response asset retrieval is capped at 25 MiB per asset.
 
 There is intentionally no configurable remote origin.
 
