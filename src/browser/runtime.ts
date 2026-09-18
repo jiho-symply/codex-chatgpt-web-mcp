@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "../config.js";
 import { ProfileLock } from "./profile-lock.js";
@@ -22,6 +23,41 @@ export interface BrowserLaunchCandidate {
   executablePath?: string;
 }
 
+export type WindowsDefaultBrowserFamily = "chrome" | "edge" | "chromium" | null;
+
+export function windowsDefaultBrowserFamilyFromRegistryOutput(
+  output: string
+): WindowsDefaultBrowserFamily {
+  const match = output.match(/^\s*ProgId\s+REG_\w+\s+(.+?)\s*$/im);
+  const progId = match?.[1]?.trim().toLowerCase() ?? "";
+  if (progId.startsWith("chromehtml")) return "chrome";
+  if (progId.startsWith("msedgehtm")) return "edge";
+  if (progId.startsWith("chromiumhtm")) return "chromium";
+  return null;
+}
+
+function detectWindowsDefaultBrowserFamily(): WindowsDefaultBrowserFamily {
+  try {
+    const output = execFileSync(
+      "reg.exe",
+      [
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice",
+        "/v",
+        "ProgId",
+      ],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      }
+    );
+    return windowsDefaultBrowserFamilyFromRegistryOutput(output);
+  } catch {
+    return null;
+  }
+}
+
 function existing(
   value: string | undefined,
   exists: (candidate: string) => boolean
@@ -36,6 +72,7 @@ export function browserLaunchCandidates(
     platform?: NodeJS.Platform;
     env?: NodeJS.ProcessEnv;
     exists?: (candidate: string) => boolean;
+    windowsDefaultBrowserFamily?: () => WindowsDefaultBrowserFamily;
   } = {}
 ): BrowserLaunchCandidate[] {
   const platform = options.platform ?? process.platform;
@@ -68,41 +105,70 @@ export function browserLaunchCandidates(
     const programFilesX86 = env["ProgramFiles(x86)"] ?? env.PROGRAMFILES_X86;
     const localAppData = env.LOCALAPPDATA;
 
-    addPath(
-      "Microsoft Edge",
-      programFilesX86
-        ? joinPath(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe")
-        : undefined
-    );
-    addPath(
-      "Microsoft Edge",
-      programFiles
-        ? joinPath(programFiles, "Microsoft", "Edge", "Application", "msedge.exe")
-        : undefined
-    );
-    addPath(
-      "Google Chrome",
-      programFiles
-        ? joinPath(programFiles, "Google", "Chrome", "Application", "chrome.exe")
-        : undefined
-    );
-    addPath(
-      "Google Chrome",
-      programFilesX86
-        ? joinPath(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
-        : undefined
-    );
-    addPath(
-      "Google Chrome",
-      localAppData
-        ? joinPath(localAppData, "Google", "Chrome", "Application", "chrome.exe")
-        : undefined
-    );
+    const addCandidate = (candidate: BrowserLaunchCandidate) => {
+      const duplicate = result.some(
+        (item) =>
+          (candidate.executablePath &&
+            item.executablePath?.toLowerCase() === candidate.executablePath.toLowerCase()) ||
+          (candidate.channel && item.channel === candidate.channel)
+      );
+      if (!duplicate) result.push(candidate);
+    };
 
-    result.push(
-      { label: "Microsoft Edge channel", channel: "msedge" },
-      { label: "Google Chrome channel", channel: "chrome" }
-    );
+    const addChrome = () => {
+      addPath(
+        "Google Chrome",
+        programFiles
+          ? joinPath(programFiles, "Google", "Chrome", "Application", "chrome.exe")
+          : undefined
+      );
+      addPath(
+        "Google Chrome",
+        programFilesX86
+          ? joinPath(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
+          : undefined
+      );
+      addPath(
+        "Google Chrome",
+        localAppData
+          ? joinPath(localAppData, "Google", "Chrome", "Application", "chrome.exe")
+          : undefined
+      );
+      addCandidate({ label: "Google Chrome channel", channel: "chrome" });
+    };
+
+    const addEdge = () => {
+      addPath(
+        "Microsoft Edge",
+        programFilesX86
+          ? joinPath(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe")
+          : undefined
+      );
+      addPath(
+        "Microsoft Edge",
+        programFiles
+          ? joinPath(programFiles, "Microsoft", "Edge", "Application", "msedge.exe")
+          : undefined
+      );
+      addCandidate({ label: "Microsoft Edge channel", channel: "msedge" });
+    };
+
+    const defaultFamily =
+      options.windowsDefaultBrowserFamily?.() ??
+      detectWindowsDefaultBrowserFamily();
+
+    if (defaultFamily === "chrome" || defaultFamily === "chromium") {
+      addChrome();
+      addEdge();
+    } else if (defaultFamily === "edge") {
+      addEdge();
+      addChrome();
+    } else {
+      // No supported Windows default could be identified. Prefer Chrome as the
+      // neutral fallback, then Edge. Explicit CGW_BROWSER_* overrides still win.
+      addChrome();
+      addEdge();
+    }
   } else if (platform === "linux") {
     for (const [label, candidate] of [
       ["Google Chrome", "/usr/bin/google-chrome"],
