@@ -7,14 +7,16 @@ Normal MCP operation is headless.
 The only step that normally requires a visible browser is the initial ChatGPT
 login. Authentication is then kept in the persistent browser profile.
 
-## Install Chromium dependencies
+## Browser requirement
 
-On Debian/Ubuntu-like hosts:
+CGW uses an installed system Chrome/Chromium browser by default. No repository
+clone/build is required for normal use.
+
+If the host has no supported browser, install Chrome/Chromium using the normal
+OS/package-manager method. Playwright Chromium remains an optional fallback:
 
 ```bash
-npm install
 npx playwright install --with-deps chromium
-npm run build
 ```
 
 ## Initial login options
@@ -25,8 +27,7 @@ When X11 forwarding is available:
 
 ```bash
 ssh -X user@server
-cd codex-chatgpt-web-mcp
-node dist/cli.js login
+npx -y github:jiho-symply/codex-chatgpt-web-mcp login
 ```
 
 Complete login in the opened browser.
@@ -55,7 +56,7 @@ Xvfb by itself creates a display but does not let a remote human see it.
 Therefore:
 
 ```bash
-xvfb-run -a node dist/cli.js login
+xvfb-run -a npx -y github:jiho-symply/codex-chatgpt-web-mcp login
 ```
 
 is only useful if you also have a secure way to view/interact with that display.
@@ -66,8 +67,8 @@ Do not expose an unauthenticated VNC/noVNC endpoint.
 Verify headless access:
 
 ```bash
-node dist/cli.js doctor
-node dist/cli.js models
+npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
+npx -y github:jiho-symply/codex-chatgpt-web-mcp models
 ```
 
 Then configure Codex.
