@@ -56,6 +56,10 @@ The persistent browser profile contains authentication state and is sensitive.
 | Remote MCP exposure | MCP transport is stdio only; no TCP listener |
 | Arbitrary browser navigation | Navigation is fixed to `https://chatgpt.com` and validated conversation URLs |
 | Concurrent chat cross-talk | Browser operations are serialized |
+| Cross-workspace ChatGPT memory/context bleed | Default sends require an opaque workspace id bound to one exact Project created with verified Project-only memory |
+| Same-name Project confusion | CGW never adopts an existing Project by name; local binding stores exact Project id and navigation verifies it |
+| Wrong-Project send | URL Project id and usable Project-bound composer are checked before typing; landed Project id is checked after send |
+| Sensitive local workspace path leakage | workspace_id accepts only opaque ws_<hex>; display names reject paths/URLs and anonymous Project naming is available |
 | Duplicate prompt after timeout/retry | Caller request id is reserved before dispatch; same id+payload is deduplicated and different payload conflicts |
 | Crash between local reservation and send confirmation | Fail-safe at-most-once behavior: ambiguous `reserved` turns are never auto-re-sent |
 | Long generation coupled to one MCP timeout | Persistent turn metadata + bounded wait slices + reply recovery |
@@ -77,6 +81,28 @@ response bodies.
 
 Turn-state files use owner-only permissions where supported and reject
 symlinked state files.
+
+## Workspace Project isolation
+
+By default, sends require an opaque local workspace id and an exact local
+workspace→ChatGPT Project binding.
+
+CGW creates a new Project only after the new-project UI exposes Project-only
+memory, that option is selected, and its selected state can be verified. It
+does not adopt an existing Project by visible name and does not silently
+fallback to default memory.
+
+Local binding state stores only the opaque workspace id plus exact ChatGPT
+Project identity. Raw workspace paths and Git remote URLs are outside the MCP
+contract.
+
+Unbinding removes only the local mapping. CGW does not automatically delete a
+remote ChatGPT Project.
+
+The Project is used only as an isolation container. CGW does not add Project
+instructions that reveal Codex/MCP orchestration.
+
+See [docs/workspace-project-isolation.md](docs/workspace-project-isolation.md).
 
 ## Explicit input staging
 
