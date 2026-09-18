@@ -230,7 +230,16 @@ export class WorkspaceProjectManager {
     }
 
     let page = await this.runtime.page();
-    if (extractProjectId(page.url()) === binding.projectId) {
+    let onProjectHome = false;
+    try {
+      const current = new URL(page.url());
+      onProjectHome =
+        extractProjectId(page.url()) === binding.projectId &&
+        /\/project\/?$/.test(current.pathname);
+    } catch {
+      onProjectHome = false;
+    }
+    if (onProjectHome) {
       return { page, binding };
     }
 
