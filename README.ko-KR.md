@@ -2,7 +2,7 @@
 
 **한국어** | [English](README.md)
 
-> **Codex는 workspace를 소유하고, proxy는 browser를 소유하며, ChatGPT는 대화만 봅니다.**
+> **Codex는 workspace를 소유하고, proxy는 browser를 소유하며, ChatGPT는 Codex가 명시적으로 보낸 것만 봅니다.**
 
 Codex가 로그인된 ChatGPT Web 세션을 reasoning/coding/review backend처럼 사용할
 수 있도록 하는 로컬 browser-backed MCP 서버입니다.
@@ -10,6 +10,106 @@ Codex가 로그인된 ChatGPT Web 세션을 reasoning/coding/review backend처�
 핵심 차이는 **ChatGPT에 repository용 MCP를 붙이지 않는다는 것**입니다. Codex가
 MCP client이고, 이 서버는 격리된 ChatGPT 브라우저 세션만 제어합니다.
 
+## 설치
+
+### 요구사항
+
+- **Node.js 20+** (`npm` / `npx` 포함)
+- **Git**
+- ChatGPT 계정
+- Codex CLI 또는 Codex UI/Desktop/IDE
+- 로컬 브라우저:
+  - **Windows:** Microsoft Edge 또는 Google Chrome
+  - **Linux:** Google Chrome 또는 Chromium
+
+CGW가 설치된 Edge/Chrome/Chromium을 자동으로 찾습니다. 일반 사용자는
+`playwright install`을 따로 실행할 필요가 없습니다.
+
+### 1. ChatGPT 최초 로그인
+
+Windows PowerShell과 Linux 모두 동일합니다.
+
+```bash
+npx -y github:jiho-symply/codex-chatgpt-web-mcp login
+```
+
+실제 브라우저가 열립니다. 로그인, CAPTCHA, 2FA는 사용자가 직접 처리합니다.
+로그인 상태는 repository 밖 OS 사용자 state directory의 private browser profile에
+저장되고 이후 MCP 동작은 headless로 실행됩니다.
+
+### 2. Codex에 추가
+
+**Codex CLI 사용자와 Codex UI/IDE 사용자 모두** 아래 명령을 권장합니다.
+
+```bash
+codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+```
+
+끝입니다.
+
+같은 host의 Codex CLI, Codex/ChatGPT desktop app, Codex IDE integration은 MCP
+설정을 공유하므로 보통 한 번만 등록하면 됩니다.
+
+#### Codex CLI / TUI
+
+```bash
+codex mcp list
+```
+
+Codex TUI 안에서는:
+
+```text
+/mcp
+```
+
+로 확인할 수 있습니다.
+
+#### Codex UI / Desktop / IDE
+
+위 `codex mcp add ...` 명령을 실행한 뒤 Codex client를 재시작하면
+`chatgpt-web`이 MCP server 목록에 표시됩니다.
+
+CLI를 전혀 사용하지 않고 UI에서 직접 추가하려면:
+
+1. **Settings → MCP Servers**
+2. **Add Server**
+3. **STDIO**
+4. 이름: `chatgpt-web`
+5. command:
+
+```text
+npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+```
+
+6. 저장 후 client 재시작
+
+Windows UI에서 `npx`를 찾지 못하면 executable을 `npx.cmd`로 지정하세요.
+
+> **Windows + WSL:** Windows native Codex와 WSL Codex는 기본적으로 서로 다른
+> Codex home을 사용합니다. 각각 MCP를 등록하거나, 의도적으로 설정을 공유하려면
+> WSL의 `CODEX_HOME`을 Windows Codex home으로 맞추세요.
+
+Codex MCP 공식 문서:
+https://developers.openai.com/docs/extend/mcp
+
+### 로그인 상태 확인
+
+```bash
+npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
+```
+
+### Codex에서 제거
+
+```bash
+codex mcp remove chatgpt-web
+```
+
+### GUI 없는 Linux
+
+최초 로그인만 화면을 볼 수 있어야 합니다. X11 forwarding 또는 임시 VNC/noVNC로
+로그인한 뒤에는 같은 profile을 headless로 재사용할 수 있습니다.
+
+[docs/headless-linux.md](docs/headless-linux.md)
 ## 구조
 
 ```text
@@ -209,106 +309,6 @@ Retry, Regenerate, Continue generating 버튼은 감지만 하며 자동 클릭�
 
 자세한 내용은 [docs/web-ui-state.md](docs/web-ui-state.md)를 참고하세요.
 
-## 설치
-
-### 요구사항
-
-- **Node.js 20+** (`npm` / `npx` 포함)
-- **Git**
-- ChatGPT 계정
-- Codex CLI 또는 Codex UI/Desktop/IDE
-- 로컬 브라우저:
-  - **Windows:** Microsoft Edge 또는 Google Chrome
-  - **Linux:** Google Chrome 또는 Chromium
-
-CGW가 설치된 Edge/Chrome/Chromium을 자동으로 찾습니다. 일반 사용자는
-`playwright install`을 따로 실행할 필요가 없습니다.
-
-### 1. ChatGPT 최초 로그인
-
-Windows PowerShell과 Linux 모두 동일합니다.
-
-```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp login
-```
-
-실제 브라우저가 열립니다. 로그인, CAPTCHA, 2FA는 사용자가 직접 처리합니다.
-로그인 상태는 repository 밖 OS 사용자 state directory의 private browser profile에
-저장되고 이후 MCP 동작은 headless로 실행됩니다.
-
-### 2. Codex에 추가
-
-**Codex CLI 사용자와 Codex UI/IDE 사용자 모두** 아래 명령을 권장합니다.
-
-```bash
-codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
-```
-
-끝입니다.
-
-같은 host의 Codex CLI, Codex/ChatGPT desktop app, Codex IDE integration은 MCP
-설정을 공유하므로 보통 한 번만 등록하면 됩니다.
-
-#### Codex CLI / TUI
-
-```bash
-codex mcp list
-```
-
-Codex TUI 안에서는:
-
-```text
-/mcp
-```
-
-로 확인할 수 있습니다.
-
-#### Codex UI / Desktop / IDE
-
-위 `codex mcp add ...` 명령을 실행한 뒤 Codex client를 재시작하면
-`chatgpt-web`이 MCP server 목록에 표시됩니다.
-
-CLI를 전혀 사용하지 않고 UI에서 직접 추가하려면:
-
-1. **Settings → MCP Servers**
-2. **Add Server**
-3. **STDIO**
-4. 이름: `chatgpt-web`
-5. command:
-
-```text
-npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
-```
-
-6. 저장 후 client 재시작
-
-Windows UI에서 `npx`를 찾지 못하면 executable을 `npx.cmd`로 지정하세요.
-
-> **Windows + WSL:** Windows native Codex와 WSL Codex는 기본적으로 서로 다른
-> Codex home을 사용합니다. 각각 MCP를 등록하거나, 의도적으로 설정을 공유하려면
-> WSL의 `CODEX_HOME`을 Windows Codex home으로 맞추세요.
-
-Codex MCP 공식 문서:
-https://developers.openai.com/docs/extend/mcp
-
-### 로그인 상태 확인
-
-```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
-```
-
-### Codex에서 제거
-
-```bash
-codex mcp remove chatgpt-web
-```
-
-### GUI 없는 Linux
-
-최초 로그인만 화면을 볼 수 있어야 합니다. X11 forwarding 또는 임시 VNC/noVNC로
-로그인한 뒤에는 같은 profile을 headless로 재사용할 수 있습니다.
-
-[docs/headless-linux.md](docs/headless-linux.md)
 ## 권장 coding 흐름
 
 ```text
