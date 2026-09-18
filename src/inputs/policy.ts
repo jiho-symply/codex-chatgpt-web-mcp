@@ -177,11 +177,10 @@ function hasMagic(bytes: Buffer, magic: string): boolean {
   return false;
 }
 
-export function validateBinaryInput(input: {
+export function validateBinaryMetadata(input: {
   filename: string;
   mime: string;
-  bytes: Buffer;
-}): { filename: string; mime: string; kind: InputKind } {
+}): { filename: string; mime: string; kind: InputKind; magic: "pdf" | "png" | "jpeg" | "gif" | "zip" | "ole" } {
   const filename = validateInputFilename(input.filename);
   const mime = input.mime.trim().toLowerCase().split(";")[0] ?? "";
   const policy = BINARY_ALLOW[mime];
@@ -198,11 +197,20 @@ export function validateBinaryInput(input: {
       "Filename extension does not match MIME type: " + ext + " vs " + mime
     );
   }
-  if (!hasMagic(input.bytes, policy.magic)) {
+  return { filename, mime, kind: policy.kind, magic: policy.magic };
+}
+
+export function validateBinaryInput(input: {
+  filename: string;
+  mime: string;
+  bytes: Buffer;
+}): { filename: string; mime: string; kind: InputKind } {
+  const metadata = validateBinaryMetadata(input);
+  if (!hasMagic(input.bytes, metadata.magic)) {
     throw new InputPolicyError(
       "UNSUPPORTED_INPUT_TYPE",
       "File signature does not match the declared supported type."
     );
   }
-  return { filename, mime, kind: policy.kind };
+  return { filename: metadata.filename, mime: metadata.mime, kind: metadata.kind };
 }
