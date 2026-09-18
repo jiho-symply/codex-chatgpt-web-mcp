@@ -2,7 +2,7 @@
 
 [한국어](README.ko-KR.md) | **English**
 
-> **Codex owns the workspace. The proxy owns the browser. ChatGPT only sees the conversation.**
+> **Codex owns the workspace. The proxy owns the browser. ChatGPT sees only what Codex explicitly sends.**
 
 A local, browser-backed MCP server that lets Codex use your authenticated
 ChatGPT Web session as a reasoning, coding, and review backend.
@@ -11,6 +11,109 @@ Unlike workspace-bridge designs, this project does **not** connect ChatGPT to
 your repository. Codex is the MCP client. The MCP server controls an isolated
 ChatGPT browser session and returns normal assistant responses to Codex.
 
+## Install
+
+### Requirements
+
+- **Node.js 20+** (`npm` / `npx` included)
+- **Git**
+- a ChatGPT account
+- Codex CLI, Codex UI/Desktop, or a Codex IDE integration
+- a local browser:
+  - **Windows:** Microsoft Edge or Google Chrome
+  - **Linux:** Google Chrome or Chromium
+
+CGW automatically uses an installed Edge/Chrome/Chromium browser. A separate
+Playwright browser download is **not required for normal use**.
+
+### 1. Sign in to ChatGPT once
+
+Windows PowerShell and Linux use the same command:
+
+```bash
+npx -y github:jiho-symply/codex-chatgpt-web-mcp login
+```
+
+A real browser opens. Complete login, CAPTCHA, or 2FA yourself. CGW stores the
+authenticated browser profile in your OS user state directory, outside your
+repositories. Normal MCP operation is headless after this one-time login.
+
+### 2. Add CGW to Codex
+
+Recommended for **both Codex CLI and Codex UI/IDE users**:
+
+```bash
+codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+```
+
+That's it.
+
+Codex CLI, the Codex/ChatGPT desktop app, and Codex IDE integrations on the same
+host share the Codex MCP configuration, so you normally register the server only
+once.
+
+#### Codex CLI / terminal UI
+
+Check the registration:
+
+```bash
+codex mcp list
+```
+
+Inside the Codex terminal UI, you can also run:
+
+```text
+/mcp
+```
+
+#### Codex UI / Desktop / IDE
+
+After running the same `codex mcp add ...` command, restart the Codex client.
+`chatgpt-web` should appear in its MCP server list.
+
+If you prefer to configure it entirely from the UI:
+
+1. Open **Settings → MCP Servers**
+2. Choose **Add Server**
+3. Select **STDIO**
+4. Name it `chatgpt-web`
+5. Use this command:
+
+```text
+npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+```
+
+6. Save and restart the client
+
+On Windows, if a UI cannot resolve `npx`, use `npx.cmd` as the executable.
+
+> **Windows + WSL:** native Windows Codex and WSL Codex use different Codex home
+> directories by default. Register CGW in each environment, or point WSL's
+> `CODEX_HOME` at the Windows Codex home if you intentionally want them to share
+> configuration.
+
+Official Codex MCP documentation:
+https://developers.openai.com/docs/extend/mcp
+
+### Verify the saved ChatGPT session
+
+```bash
+npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
+```
+
+### Remove from Codex
+
+```bash
+codex mcp remove chatgpt-web
+```
+
+### Linux without a desktop
+
+The initial login needs a visible browser once. On a headless Linux server, use
+X11 forwarding or a temporary trusted VNC/noVNC session, complete login, then
+return to normal headless operation.
+
+See [docs/headless-linux.md](docs/headless-linux.md).
 ## Architecture
 
 ```text
@@ -118,109 +221,6 @@ re-sending the prompt.
 
 See [docs/reliability.md](docs/reliability.md).
 
-## Install
-
-### Requirements
-
-- **Node.js 20+** (`npm` / `npx` included)
-- **Git**
-- a ChatGPT account
-- Codex CLI, Codex UI/Desktop, or a Codex IDE integration
-- a local browser:
-  - **Windows:** Microsoft Edge or Google Chrome
-  - **Linux:** Google Chrome or Chromium
-
-CGW automatically uses an installed Edge/Chrome/Chromium browser. A separate
-Playwright browser download is **not required for normal use**.
-
-### 1. Sign in to ChatGPT once
-
-Windows PowerShell and Linux use the same command:
-
-```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp login
-```
-
-A real browser opens. Complete login, CAPTCHA, or 2FA yourself. CGW stores the
-authenticated browser profile in your OS user state directory, outside your
-repositories. Normal MCP operation is headless after this one-time login.
-
-### 2. Add CGW to Codex
-
-Recommended for **both Codex CLI and Codex UI/IDE users**:
-
-```bash
-codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
-```
-
-That's it.
-
-Codex CLI, the Codex/ChatGPT desktop app, and Codex IDE integrations on the same
-host share the Codex MCP configuration, so you normally register the server only
-once.
-
-#### Codex CLI / terminal UI
-
-Check the registration:
-
-```bash
-codex mcp list
-```
-
-Inside the Codex terminal UI, you can also run:
-
-```text
-/mcp
-```
-
-#### Codex UI / Desktop / IDE
-
-After running the same `codex mcp add ...` command, restart the Codex client.
-`chatgpt-web` should appear in its MCP server list.
-
-If you prefer to configure it entirely from the UI:
-
-1. Open **Settings → MCP Servers**
-2. Choose **Add Server**
-3. Select **STDIO**
-4. Name it `chatgpt-web`
-5. Use this command:
-
-```text
-npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
-```
-
-6. Save and restart the client
-
-On Windows, if a UI cannot resolve `npx`, use `npx.cmd` as the executable.
-
-> **Windows + WSL:** native Windows Codex and WSL Codex use different Codex home
-> directories by default. Register CGW in each environment, or point WSL's
-> `CODEX_HOME` at the Windows Codex home if you intentionally want them to share
-> configuration.
-
-Official Codex MCP documentation:
-https://developers.openai.com/docs/extend/mcp
-
-### Verify the saved ChatGPT session
-
-```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
-```
-
-### Remove from Codex
-
-```bash
-codex mcp remove chatgpt-web
-```
-
-### Linux without a desktop
-
-The initial login needs a visible browser once. On a headless Linux server, use
-X11 forwarding or a temporary trusted VNC/noVNC session, complete login, then
-return to normal headless operation.
-
-See [docs/headless-linux.md](docs/headless-linux.md).
 ## Typical coding workflow
 
 Codex remains the orchestrator:
