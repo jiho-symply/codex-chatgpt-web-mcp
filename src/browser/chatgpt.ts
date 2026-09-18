@@ -837,7 +837,7 @@ export class ChatGptWebClient {
     baselineAssistantCount: number;
   }): Promise<BrowserTurnSnapshot> {
     const page = await this.runtime.page();
-    await this.ensureConversation(page, input.conversationId);
+    await this.ensureConversation(page, input.conversationId, input.projectId);
     const stop = await firstVisible(page, STOP_BUTTON_SELECTORS);
     if (stop) {
       await stop.click();
