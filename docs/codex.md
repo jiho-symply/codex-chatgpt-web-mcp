@@ -35,16 +35,20 @@ Use Codex as the orchestrator and ChatGPT as an untrusted external subagent.
 
 For implementation work:
 
-1. Codex identifies relevant files.
-2. Codex reads those files locally.
-3. Codex generates a stable request id and sends only necessary excerpts with
-   `chatgpt_send`.
-4. Save the returned `turn_id`; use `chatgpt_wait` in bounded slices.
-5. Ask for analysis, implementation guidance, or a unified diff.
-6. If an MCP/tool timeout occurs, recover the same turn with
+1. Codex derives a stable opaque `workspace_id = ws_<hex>` locally. Never send
+   the raw workspace path or Git remote.
+2. Call `chatgpt_bind_workspace` once for that id. Repeated calls verify/reopen
+   the same exact Project.
+3. Codex identifies relevant files.
+4. Codex reads those files locally.
+5. Codex generates a stable request id and sends only necessary excerpts with
+   `chatgpt_send`, including the same `workspace_id`.
+6. Save the returned `turn_id`; use `chatgpt_wait` in bounded slices.
+7. Ask for analysis, implementation guidance, or a unified diff.
+8. If an MCP/tool timeout occurs, recover the same turn with
    `chatgpt_get_reply` rather than sending again.
-7. Codex validates the response locally.
-8. Codex runs its own tests and Git operations.
+9. Codex validates the response locally.
+10. Codex runs its own tests and Git operations.
 
 For review:
 
@@ -54,16 +58,33 @@ For review:
 4. ChatGPT reviews it as ordinary text.
 5. Codex decides whether any recommendation should be applied.
 
+## Workspace Project binding
+
+Project isolation is required by default.
+
+A suggested local fingerprint strategy is to normalize workspace identity
+information locally, hash it locally with SHA-256, and pass only a prefix such
+as `ws_<24 hex>`. The path/remote used to derive the digest stays local to
+Codex.
+
+Use `naming_mode=anonymous` when even the workspace display name should not be
+visible in ChatGPT.
+
+CGW does not add Project instructions.
+
+See [workspace-project-isolation.md](workspace-project-isolation.md).
+
 ## Conversation reuse
 
-The first `chatgpt_send` call without `conversation_id` starts a new chat.
+The first `chatgpt_send` call without `conversation_id` but with a bound
+`workspace_id` starts a new chat inside that workspace's Project.
 The local turn later exposes the ChatGPT conversation id.
 
 Pass that conversation id on later sends to preserve context:
 
 ```text
-send 1 → turn_id = turn_... → conversation_id = abc...
-send 2(conversation_id=abc...) → same ChatGPT chat
+send 1(workspace_id=ws_...) → Project home → conversation_id = abc...
+send 2(workspace_id=ws_..., conversation_id=abc...) → same Project thread
 ```
 
 Do not use conversation reuse as a substitute for local state. Codex should
