@@ -8,7 +8,7 @@ The security boundary is:
 
 - **Codex owns local code and execution.**
 - **The MCP proxy owns only an authenticated ChatGPT browser profile.**
-- **ChatGPT receives only prompt text and returns only response text.**
+- **ChatGPT receives only explicit prompt text and explicitly staged attachments; outputs return as response text/manifests/assets.**
 
 The MCP server has no repository root input and exposes no filesystem, shell,
 Git, package-manager, patch-apply, or generic navigation tool.
@@ -23,10 +23,9 @@ A response may contain incorrect code, destructive shell commands, prompt
 injection, or a malicious-looking patch. Codex must independently review and
 validate it before use.
 
-### Prompt content
+### Prompt and attachment content
 
-Prompt text is sent to ChatGPT Web. Codex should include only the minimum
-workspace context required for the task.
+Prompt text and any referenced staged attachments are sent to ChatGPT Web. Codex should include only the minimum workspace context required for the task.
 
 This proxy cannot determine whether source code is confidential. The caller is
 responsible for data-minimization and policy compliance.
