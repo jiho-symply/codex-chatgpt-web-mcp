@@ -51,7 +51,21 @@ jobs:
       - name: Inspect package contents
         run: npm pack --dry-run
 
+      - name: Check whether version already exists
+        id: registry
+        shell: bash
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          FOUND="$(npm view "codex-chatgpt-web-mcp@${VERSION}" version 2>/dev/null || true)"
+          if [[ "${FOUND}" == "${VERSION}" ]]; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "codex-chatgpt-web-mcp@${VERSION} already exists; publish will be skipped."
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Publish to npm
+        if: steps.registry.outputs.exists != 'true'
         run: npm publish --access public --tag "${{ steps.release.outputs.npm_tag }}"
 
       - name: Verify registry install
