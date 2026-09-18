@@ -47,7 +47,7 @@ another network attack surface.
 
 ### Option C: existing graphical session on the same trusted host
 
-Run `cgw login` once in that session, then use the same OS account/state
+Run `npx -y github:jiho-symply/codex-chatgpt-web-mcp login` once in that session, then use the same OS account/state
 directory for headless MCP operation.
 
 ## Xvfb note
