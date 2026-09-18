@@ -129,7 +129,9 @@ memory를 실제 UI에서 선택하고 선택 상태를 확인한 경우에만**
 fallback하지 않습니다.
 
 이후 모든 `chatgpt_send` / `chatgpt_chat`에 동일한 `workspace_id`를
-전달합니다.
+전달합니다. 그리고 **매 workspace send 직전 Project settings를 다시 열어 현재
+Memory가 여전히 Project-only인지 재검증**합니다. 확인할 수 없거나 다른 memory
+mode이면 prompt를 보내지 않습니다.
 
 ```text
 workspace A → Project A → 여러 chat
