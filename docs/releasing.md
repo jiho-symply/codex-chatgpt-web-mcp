@@ -20,10 +20,15 @@ The npm package must exist once before npm trusted publishing can be configured.
 npm install
 npm run typecheck
 npm test
-npm publish --access public
+npm publish --access public --otp <NEW_OTP>
 ```
 
 For v0.9.0 this creates the package for the first time.
+
+The OTP used by `npm login` does not satisfy the later publish challenge.
+Generate/use a fresh authenticator code for `npm publish --otp ...`. If npm
+does not prompt automatically, passing `--otp` explicitly is the supported
+CLI path.
 
 If npm reports that the package name is already owned by someone else, stop.
 Do not publish under an unexpected package name without updating the repository
