@@ -8,6 +8,7 @@ export type AssetKind = "file" | "image";
 export interface AssetRecord {
   assetId: string;
   conversationId: string;
+  projectId: string | null;
   assistantIndex: number;
   kind: AssetKind;
   ordinal: number;
@@ -85,6 +86,7 @@ function writeState(stateDir: string, state: AssetState): void {
 
 function deterministicAssetId(input: {
   conversationId: string;
+  projectId?: string | null;
   assistantIndex: number;
   kind: AssetKind;
   ordinal: number;
@@ -115,6 +117,7 @@ export class AssetStore {
 
   register(input: {
     conversationId: string;
+    projectId?: string | null;
     assistantIndex: number;
     kind: AssetKind;
     ordinal: number;
@@ -125,6 +128,7 @@ export class AssetStore {
     const state = readState(this.stateDir);
     const existing = state.items.find((item) => item.assetId === assetId);
     if (existing) {
+      existing.projectId = input.projectId ?? existing.projectId ?? null;
       existing.filename = input.filename ?? existing.filename;
       existing.mime = input.mime ?? existing.mime;
       writeState(this.stateDir, state);
@@ -134,6 +138,7 @@ export class AssetStore {
     const record: AssetRecord = {
       assetId,
       conversationId: input.conversationId,
+      projectId: input.projectId ?? null,
       assistantIndex: input.assistantIndex,
       kind: input.kind,
       ordinal: input.ordinal,
