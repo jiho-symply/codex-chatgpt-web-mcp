@@ -139,6 +139,47 @@ program
   });
 
 program
+  .command("bind-workspace")
+  .description("Create/verify one Project-only-memory ChatGPT Project for an opaque workspace fingerprint")
+  .argument("<workspace-id>", "opaque ws_<hex> fingerprint; never pass a raw path")
+  .option("--name <display-name>", "human-readable workspace name used in the ChatGPT Project title")
+  .option("--anonymous", "use an anonymous Project title instead of the workspace name", false)
+  .action(async (workspaceId: string, opts: { name?: string; anonymous: boolean }) => {
+    say(
+      await withContext(true, (client) =>
+        client.bindWorkspaceProject({
+          workspaceId,
+          ...(opts.name ? { workspaceName: opts.name } : {}),
+          namingMode: opts.anonymous ? "anonymous" : "workspace-name",
+        })
+      )
+    );
+  });
+
+program
+  .command("workspace-project")
+  .description("Show the local ChatGPT Project binding for one workspace")
+  .argument("<workspace-id>")
+  .action(async (workspaceId: string) => {
+    say(await withContext(true, (client) => Promise.resolve(client.getWorkspaceProject(workspaceId))));
+  });
+
+program
+  .command("workspace-projects")
+  .description("List only CGW-managed local workspace-to-Project bindings")
+  .action(async () => {
+    say(await withContext(true, (client) => Promise.resolve({ bindings: client.listWorkspaceProjects() })));
+  });
+
+program
+  .command("unbind-workspace")
+  .description("Delete only the local workspace mapping; the remote ChatGPT Project is not deleted")
+  .argument("<workspace-id>")
+  .action(async (workspaceId: string) => {
+    say(await withContext(true, (client) => Promise.resolve(client.unbindWorkspaceProject(workspaceId))));
+  });
+
+program
   .command("stage-text")
   .description("Stage explicit UTF-8 text for a later ChatGPT attachment")
   .requiredOption("--filename <name>")
@@ -231,11 +272,12 @@ program
   .option("--conversation <id>")
   .option("--model <label>")
   .option("--effort <label>")
+  .option("--workspace <id>", "bound workspace id (ws_<hex>); required by default")
   .option("--input <id>", "staged input asset id; repeat for multiple attachments", collect, [])
   .action(
     async (
       prompt: string,
-      opts: { requestId: string; conversation?: string; model?: string; effort?: string; input: string[] }
+      opts: { requestId: string; conversation?: string; model?: string; effort?: string; workspace?: string; input: string[] }
     ) => {
       say(
         await withContext(true, (_client, _runtime, turns) =>
@@ -245,6 +287,7 @@ program
             ...(opts.conversation ? { conversationId: opts.conversation } : {}),
             ...(opts.model ? { model: opts.model } : {}),
             ...(opts.effort ? { effort: opts.effort } : {}),
+            ...(opts.workspace ? { workspaceId: opts.workspace } : {}),
             ...(opts.input.length ? { inputAssetIds: opts.input } : {}),
           })
         )
@@ -297,6 +340,7 @@ program
   .option("--conversation <id>")
   .option("--model <label>")
   .option("--effort <label>")
+  .option("--workspace <id>", "bound workspace id (ws_<hex>); required by default")
   .option("--input <id>", "staged input asset id; repeat for multiple attachments", collect, [])
   .option("--timeout-ms <n>", "overall generation timeout", parseInteger, 180_000)
   .action(
@@ -307,6 +351,7 @@ program
         conversation?: string;
         model?: string;
         effort?: string;
+        workspace?: string;
         input: string[];
         timeoutMs: number;
       }
@@ -319,6 +364,7 @@ program
           ...(opts.conversation ? { conversationId: opts.conversation } : {}),
           ...(opts.model ? { model: opts.model } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
+          ...(opts.workspace ? { workspaceId: opts.workspace } : {}),
           ...(opts.input.length ? { inputAssetIds: opts.input } : {}),
         })
       );
