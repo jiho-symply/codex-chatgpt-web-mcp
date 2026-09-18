@@ -65,6 +65,7 @@ Codex가 검증/적용/테스트
 - Cookie/token/password/profile을 읽어오는 MCP tool은 존재하지 않습니다.
 - 로그인, CAPTCHA, 2FA 우회 기능을 구현하지 않습니다.
 - 한 browser profile에서 요청을 직렬화하여 대화 race를 막습니다.
+- workspace별 exact ChatGPT Project와 Project-only memory를 사용해 ChatGPT 측 context도 격리합니다.
 - request id를 browser 전송 전에 저장해 재시도에 따른 중복 prompt를 막습니다.
 - 긴 응답은 하나의 긴 MCP call에 묶지 않고 turn 상태로 복구할 수 있습니다.
 - 생성 파일/이미지는 명시적 요청 전에는 다운로드하지 않고 private staging에만 저장합니다.
@@ -110,6 +111,39 @@ Codex가 검증/적용/테스트
 
 Codex는 필요한 코드만 prompt에 포함시키고, 반환된 코드/diff를 로컬에서 검증한
 뒤 적용할 수 있습니다.
+
+## Workspace → ChatGPT Project 격리
+
+v0.5부터 기본 동작은 **Codex workspace 하나당 ChatGPT Project 하나**입니다.
+
+Codex가 로컬에서 raw path/remote URL을 hash하여 `ws_<hex>` 형태의 opaque
+`workspace_id`를 만든 뒤 한 번 binding합니다.
+
+```text
+chatgpt_bind_workspace(workspace_id, workspace_name?, naming_mode?)
+```
+
+binding이 없으면 CGW가 새 ChatGPT Project를 생성합니다. 이때 **Project-only
+memory를 실제 UI에서 선택하고 선택 상태를 확인한 경우에만** 생성을 완료합니다.
+동일 이름의 기존 Project를 추측해서 재사용하거나 default-memory Project로
+fallback하지 않습니다.
+
+이후 모든 `chatgpt_send` / `chatgpt_chat`에 동일한 `workspace_id`를
+전달합니다.
+
+```text
+workspace A → Project A → 여러 chat
+workspace B → Project B → 여러 chat
+```
+
+`conversation_id`가 없으면 해당 Project home에서 새 chat을 만들고,
+`conversation_id`가 있으면 같은 Project 안의 정확한 기존 thread를 다시 엽니다.
+
+기본값은 Project 격리 필수입니다. 의도적으로 일반 ChatGPT chat을 사용하려는
+경우에만 `CGW_REQUIRE_WORKSPACE_PROJECT=false`로 opt-out 할 수 있습니다.
+
+Project 이름이 민감하면 `anonymous` naming을 사용할 수 있습니다. 자세한 내용은
+[docs/workspace-project-isolation.md](docs/workspace-project-isolation.md)를 참고하세요.
 
 ## 명시적 입력 첨부
 
