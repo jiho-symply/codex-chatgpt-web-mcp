@@ -78,6 +78,9 @@ export const FILE_ASSET_SELECTOR = [
   "[data-testid*=\"file_attachment\"]",
   "[data-testid*=\"attachment\"][role=\"button\"]",
   "button[data-testid*=\"download\"]",
+  "button[aria-label*=\"download\" i]",
+  "button[aria-label*=\"다운로드\"]",
+  "a[aria-label*=\"download\" i]",
 ].join(", ");
 
 export const IMAGE_ASSET_SELECTOR = "img[src]";
@@ -87,6 +90,8 @@ export const CITATION_SELECTOR = [
   "a[data-testid*=\"citation\"][href]",
   "[data-testid*=\"citation\"] a[href]",
   "a[data-testid*=\"source\"][href]",
+  "[data-testid*=\"citation\"]",
+  "button[data-testid*=\"source\"]",
 ].join(", ");
 
 export const PREVIEW_SELECTOR = [
