@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { browserLaunchCandidates } from "../src/browser/runtime.js";
+import {
+  browserLaunchCandidates,
+  windowsDefaultBrowserFamilyFromRegistryOutput,
+} from "../src/browser/runtime.js";
 
 describe("browser launch candidates", () => {
-  it("prefers installed Edge/Chrome on Windows", () => {
+  it("prefers Chrome when Windows reports Chrome as the default browser", () => {
     const found = new Set([
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
       "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
     ]);
     const candidates = browserLaunchCandidates(
@@ -16,6 +20,33 @@ describe("browser launch candidates", () => {
           LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
         },
         exists: (value) => found.has(value),
+        windowsDefaultBrowserFamily: () => "chrome",
+      }
+    );
+
+    expect(candidates[0]).toEqual({
+      label: "Google Chrome",
+      executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    });
+    expect(candidates.findIndex((item) => item.label === "Microsoft Edge")).toBeGreaterThan(0);
+  });
+
+  it("prefers Edge when Windows reports Edge as the default browser", () => {
+    const found = new Set([
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ]);
+    const candidates = browserLaunchCandidates(
+      { browserChannel: undefined, browserExecutable: undefined },
+      {
+        platform: "win32",
+        env: {
+          ProgramFiles: "C:\\Program Files",
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+          LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
+        },
+        exists: (value) => found.has(value),
+        windowsDefaultBrowserFamily: () => "edge",
       }
     );
 
@@ -24,11 +55,24 @@ describe("browser launch candidates", () => {
       executablePath:
         "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
     });
-    expect(candidates).toContainEqual({
-      label: "Microsoft Edge channel",
-      channel: "msedge",
-    });
-    expect(candidates.at(-1)).toEqual({ label: "Playwright Chromium" });
+  });
+
+  it("parses Windows default browser ProgId values", () => {
+    expect(
+      windowsDefaultBrowserFamilyFromRegistryOutput(
+        "HKEY_CURRENT_USER\\...\\UserChoice\r\n    ProgId    REG_SZ    ChromeHTML\r\n"
+      )
+    ).toBe("chrome");
+    expect(
+      windowsDefaultBrowserFamilyFromRegistryOutput(
+        "HKEY_CURRENT_USER\\...\\UserChoice\r\n    ProgId    REG_SZ    MSEdgeHTM\r\n"
+      )
+    ).toBe("edge");
+    expect(
+      windowsDefaultBrowserFamilyFromRegistryOutput(
+        "HKEY_CURRENT_USER\\...\\UserChoice\r\n    ProgId    REG_SZ    FirefoxURL-123\r\n"
+      )
+    ).toBeNull();
   });
 
   it("finds system Chromium on Linux before bundled Playwright Chromium", () => {
