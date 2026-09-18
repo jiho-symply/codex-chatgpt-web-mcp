@@ -33,7 +33,7 @@ ChatGPT가 직접 갖는 권한은 없습니다.
 - patch apply 없음
 - browser profile/cookie 읽기 도구 없음
 
-ChatGPT는 Codex가 메시지에 넣어준 텍스트만 봅니다.
+ChatGPT는 Codex가 명시적으로 선택한 prompt와 staged attachment만 봅니다.
 
 ## 왜 이 구조인가
 
@@ -252,7 +252,7 @@ Codex
  └─ git
 ```
 
-ChatGPT는 이 과정에서 Codex나 local workspace의 존재를 알 필요가 없습니다.
+ChatGPT는 이 과정에서 Codex나 local workspace의 존재를 알 필요가 없으며, Codex가 명시적으로 선택한 prompt/attachment만 전달받습니다.
 
 ## Headless Linux
 
