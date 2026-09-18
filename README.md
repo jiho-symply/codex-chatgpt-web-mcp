@@ -197,6 +197,7 @@ New tools:
 
 - `chatgpt_stage_text`
 - `chatgpt_stage_blob`
+- `chatgpt_create_blob_slot` / `chatgpt_commit_blob_slot` for larger binaries
 - `chatgpt_list_staged_inputs`
 - `chatgpt_discard_staged_input`
 
