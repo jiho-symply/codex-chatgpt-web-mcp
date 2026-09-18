@@ -428,6 +428,19 @@ export class ChatGptWebClient {
     }
   }
 
+  private async composerScope(page: Page): Promise<Locator> {
+    const composer = await this.requireComposer(page);
+    const form = composer.locator("xpath=ancestor::form[1]");
+    if ((await form.count().catch(() => 0)) > 0) return form.first();
+
+    const withFileInput = composer.locator(
+      'xpath=ancestor::*[descendant::input[@type="file"]][1]'
+    );
+    if ((await withFileInput.count().catch(() => 0)) > 0) return withFileInput.first();
+
+    return composer.locator("xpath=..");
+  }
+
   private async uploadInputBatch(
     page: Page,
     uploadInput: Locator,
@@ -436,17 +449,18 @@ export class ChatGptWebClient {
   ): Promise<void> {
     const paths = assets.map((asset) => asset.path);
     const filenames = assets.map((asset) => asset.record.filename);
-    const started = Date.now();
     await uploadInput.setInputFiles(paths);
 
     const deadline = Date.now() + 30_000;
+    let confirmedSince: number | null = null;
     while (Date.now() < deadline) {
       const ui = await detectChatGptUiState(page);
       throwForUiState(ui);
 
+      const scope = await this.composerScope(page);
       let named = 0;
       for (const filename of filenames) {
-        const visible = await page
+        const visible = await scope
           .getByText(filename, { exact: true })
           .last()
           .isVisible()
@@ -454,21 +468,29 @@ export class ChatGptWebClient {
         if (visible) named++;
       }
 
-      const chipCount = await page.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
-      const busy = await page.locator(UPLOAD_BUSY_SELECTOR).first().isVisible().catch(() => false);
+      const chipCount = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
+      const busy = await scope.locator(UPLOAD_BUSY_SELECTOR).first().isVisible().catch(() => false);
       const fileCount = await uploadInput
         .evaluate((node) => (node as HTMLInputElement).files?.length ?? 0)
         .catch(() => 0);
+      const sendReady = await firstVisible(page, SEND_BUTTON_SELECTORS)
+        .then((button) => button?.isEnabled().catch(() => false) ?? false)
+        .catch(() => false);
 
-      const observed =
+      const strongEvidence =
         named === filenames.length ||
-        chipCount >= beforeChips + filenames.length ||
-        fileCount === filenames.length;
+        chipCount >= beforeChips + filenames.length;
+      const fallbackEvidence =
+        fileCount === filenames.length && sendReady;
 
-      if (Date.now() - started >= 750 && observed && !busy) {
-        await page.waitForTimeout(300);
-        throwForUiState(await detectChatGptUiState(page));
-        return;
+      if ((strongEvidence || fallbackEvidence) && !busy) {
+        confirmedSince ??= Date.now();
+        if (Date.now() - confirmedSince >= 750) {
+          throwForUiState(await detectChatGptUiState(page));
+          return;
+        }
+      } else {
+        confirmedSince = null;
       }
       await page.waitForTimeout(250);
     }
@@ -480,23 +502,45 @@ export class ChatGptWebClient {
   }
 
   private async requireUploadInput(page: Page): Promise<Locator> {
-    let uploadInput = await firstExisting(page, UPLOAD_INPUT_SELECTORS);
+    let scope = await this.composerScope(page);
+    let uploadInput: Locator | null = null;
+    for (const selector of UPLOAD_INPUT_SELECTORS) {
+      const candidate = scope.locator(selector).first();
+      if ((await candidate.count().catch(() => 0)) > 0) {
+        uploadInput = candidate;
+        break;
+      }
+    }
     if (uploadInput) return uploadInput;
 
-    const attach = await firstVisible(page, ATTACH_BUTTON_SELECTORS);
+    let attach: Locator | null = null;
+    for (const selector of ATTACH_BUTTON_SELECTORS) {
+      const candidate = scope.locator(selector).first();
+      if (await candidate.isVisible().catch(() => false)) {
+        attach = candidate;
+        break;
+      }
+    }
     if (!attach) {
       throw new ChatGptWebError(
         "UPLOAD_UNAVAILABLE",
-        "Could not find a safe ChatGPT attachment control."
+        "Could not find a safe attachment control inside the ChatGPT composer."
       );
     }
     await attach.click();
     await page.waitForTimeout(250);
-    uploadInput = await firstExisting(page, UPLOAD_INPUT_SELECTORS);
+    scope = await this.composerScope(page);
+    for (const selector of UPLOAD_INPUT_SELECTORS) {
+      const candidate = scope.locator(selector).first();
+      if ((await candidate.count().catch(() => 0)) > 0) {
+        uploadInput = candidate;
+        break;
+      }
+    }
     if (!uploadInput) {
       throw new ChatGptWebError(
         "UPLOAD_UNAVAILABLE",
-        "Attachment control opened but no file input became available."
+        "Attachment control opened but no composer-scoped file input became available."
       );
     }
     return uploadInput;
@@ -522,7 +566,8 @@ export class ChatGptWebClient {
 
     let uploadInput = await this.requireUploadInput(page);
     const multiple = (await uploadInput.getAttribute("multiple")) !== null;
-    let beforeChips = await page.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
+    let scope = await this.composerScope(page);
+    let beforeChips = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
 
     if (multiple || assets.length === 1) {
       await this.uploadInputBatch(page, uploadInput, assets, beforeChips);
@@ -532,7 +577,8 @@ export class ChatGptWebClient {
     for (const asset of assets) {
       uploadInput = await this.requireUploadInput(page);
       await this.uploadInputBatch(page, uploadInput, [asset], beforeChips);
-      beforeChips = await page.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => beforeChips + 1);
+      scope = await this.composerScope(page);
+      beforeChips = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => beforeChips + 1);
     }
   }
 
@@ -560,11 +606,11 @@ export class ChatGptWebClient {
       );
     }
     await this.applySelections(page, input.model, input.effort);
-    await this.uploadInputs(page, resolvedInputs);
 
     const baselineAssistantCount = await page.locator(ASSISTANT_MESSAGE_SELECTOR).count();
     await composer.fill(input.prompt);
     await page.waitForTimeout(100);
+    await this.uploadInputs(page, resolvedInputs);
 
     const send = await firstVisible(page, SEND_BUTTON_SELECTORS);
     if (send && (await send.isEnabled().catch(() => false))) await send.click();
