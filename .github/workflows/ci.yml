@@ -21,5 +21,6 @@ jobs:
           node-version: "22"
 
       - run: npm install
+      - run: node bin/cgw.mjs --version
       - run: npm run typecheck
       - run: npm test
