@@ -55,7 +55,13 @@ export function defaultStateDir(): string {
 }
 
 export function ensurePrivateDir(dir: string): string {
+  if (fs.existsSync(dir) && fs.lstatSync(dir).isSymbolicLink()) {
+    throw new Error("Refusing to use a symlink as private state directory: " + dir);
+  }
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (fs.lstatSync(dir).isSymbolicLink()) {
+    throw new Error("Refusing to use a symlink as private state directory: " + dir);
+  }
   try {
     fs.chmodSync(dir, 0o700);
   } catch {
