@@ -120,6 +120,7 @@ program
     say("Authenticated: " + (result.authenticated ? "yes" : "no"));
     say("UI ready: " + (result.uiReady ? "yes" : "no"));
     say("Headless: " + (result.headless ? "yes" : "no"));
+    say("UI state: " + result.ui.state);
     if (!result.authenticated) {
       process.exitCode = 1;
       say("Run cgw login from an interactive graphical session.");
@@ -179,6 +180,14 @@ program
   .argument("<turn-id>")
   .action(async (turnId: string) => {
     say(await withContext(true, (_client, _runtime, turns) => turns.getReply(turnId)));
+  });
+
+program
+  .command("get-asset")
+  .description("Retrieve a response file/image into the private CGW staging directory")
+  .argument("<asset-id>")
+  .action(async (assetId: string) => {
+    say(await withContext(true, (client) => client.getAsset(assetId)));
   });
 
 program
