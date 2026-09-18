@@ -9,7 +9,7 @@
 │  ┌────────────┐       MCP stdio      ┌───────────────┐  │
 │  │   Codex    │─────────────────────▶│ Web Proxy MCP │  │
 │  │            │◀─────────────────────│               │  │
-│  │ repo/shell │    response text     │ browser only  │  │
+│  │ repo/shell │ response manifest    │ browser only  │  │
 │  └────────────┘                      └───────┬───────┘  │
 │                                             │           │
 └─────────────────────────────────────────────┼───────────┘
@@ -55,7 +55,7 @@ The server is responsible only for:
 
 ### ChatGPT Web
 
-ChatGPT receives an ordinary chat message. It does not receive a repository
+ChatGPT receives an ordinary chat message plus only the attachments explicitly staged and referenced by Codex. It does not receive a repository
 connector from this project and does not know the caller's local orchestration
 state unless Codex explicitly puts that information into the prompt.
 
