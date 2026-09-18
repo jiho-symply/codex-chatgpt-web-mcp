@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "../config.js";
 import { ProfileLock } from "./profile-lock.js";
@@ -12,6 +14,132 @@ export class BrowserRuntimeError extends Error {
     super(message);
     this.name = "BrowserRuntimeError";
   }
+}
+
+export interface BrowserLaunchCandidate {
+  label: string;
+  channel?: string;
+  executablePath?: string;
+}
+
+function existing(
+  value: string | undefined,
+  exists: (candidate: string) => boolean
+): string | null {
+  if (!value) return null;
+  return exists(value) ? value : null;
+}
+
+export function browserLaunchCandidates(
+  config: Pick<AppConfig, "browserChannel" | "browserExecutable">,
+  options: {
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+    exists?: (candidate: string) => boolean;
+  } = {}
+): BrowserLaunchCandidate[] {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const exists = options.exists ?? fs.existsSync;
+
+  if (config.browserExecutable) {
+    return [
+      {
+        label: "configured browser executable",
+        executablePath: config.browserExecutable,
+      },
+    ];
+  }
+  if (config.browserChannel) {
+    return [{ label: "configured browser channel", channel: config.browserChannel }];
+  }
+
+  const result: BrowserLaunchCandidate[] = [];
+  const joinPath = platform === "win32" ? path.win32.join : path.join;
+  const addPath = (label: string, value: string | undefined) => {
+    const found = existing(value, exists);
+    if (found && !result.some((item) => item.executablePath === found)) {
+      result.push({ label, executablePath: found });
+    }
+  };
+
+  if (platform === "win32") {
+    const programFiles = env.ProgramFiles ?? env.PROGRAMFILES;
+    const programFilesX86 = env["ProgramFiles(x86)"] ?? env.PROGRAMFILES_X86;
+    const localAppData = env.LOCALAPPDATA;
+
+    addPath(
+      "Microsoft Edge",
+      programFilesX86
+        ? joinPath(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe")
+        : undefined
+    );
+    addPath(
+      "Microsoft Edge",
+      programFiles
+        ? joinPath(programFiles, "Microsoft", "Edge", "Application", "msedge.exe")
+        : undefined
+    );
+    addPath(
+      "Google Chrome",
+      programFiles
+        ? joinPath(programFiles, "Google", "Chrome", "Application", "chrome.exe")
+        : undefined
+    );
+    addPath(
+      "Google Chrome",
+      programFilesX86
+        ? joinPath(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
+        : undefined
+    );
+    addPath(
+      "Google Chrome",
+      localAppData
+        ? joinPath(localAppData, "Google", "Chrome", "Application", "chrome.exe")
+        : undefined
+    );
+
+    result.push(
+      { label: "Microsoft Edge channel", channel: "msedge" },
+      { label: "Google Chrome channel", channel: "chrome" }
+    );
+  } else if (platform === "linux") {
+    for (const [label, candidate] of [
+      ["Google Chrome", "/usr/bin/google-chrome"],
+      ["Google Chrome", "/usr/bin/google-chrome-stable"],
+      ["Google Chrome", "/opt/google/chrome/chrome"],
+      ["Chromium", "/usr/bin/chromium"],
+      ["Chromium", "/usr/bin/chromium-browser"],
+      ["Chromium", "/snap/bin/chromium"],
+      ["Microsoft Edge", "/usr/bin/microsoft-edge"],
+      ["Microsoft Edge", "/usr/bin/microsoft-edge-stable"],
+    ] as const) {
+      addPath(label, candidate);
+    }
+    result.push(
+      { label: "Google Chrome channel", channel: "chrome" },
+      { label: "Microsoft Edge channel", channel: "msedge" }
+    );
+  } else if (platform === "darwin") {
+    result.push(
+      { label: "Google Chrome channel", channel: "chrome" },
+      { label: "Microsoft Edge channel", channel: "msedge" }
+    );
+  }
+
+  // Last resort for contributors/users who already have Playwright Chromium.
+  result.push({ label: "Playwright Chromium" });
+  return result;
+}
+
+function isMissingBrowserError(message: string): boolean {
+  return /executable.*doesn.?t exist|browser.*not found|distribution.*not found|playwright.*install|could not find.*(?:chrome|edge|chromium)/i.test(
+    message
+  );
+}
+
+function isProfileBusyError(message: string): boolean {
+  return /already in use|profile.*use/i.test(message);
 }
 
 export class BrowserRuntime {
@@ -29,28 +157,57 @@ export class BrowserRuntime {
 
     try {
       this.lock = ProfileLock.acquire(this.config.profileDir);
-      const channel = this.config.browserChannel;
-      this.context = await chromium.launchPersistentContext(this.config.profileDir, {
-        headless: this.config.headless,
-        acceptDownloads: true,
-        viewport: { width: 1440, height: 1000 },
-        args: ["--disable-dev-shm-usage"],
-        ...(channel ? { channel } : {}),
-      });
-      this.context.setDefaultTimeout(15_000);
-      return this.context;
+
+      const attempted: string[] = [];
+      for (const candidate of browserLaunchCandidates(this.config)) {
+        attempted.push(candidate.label);
+        try {
+          this.context = await chromium.launchPersistentContext(
+            this.config.profileDir,
+            {
+              headless: this.config.headless,
+              acceptDownloads: true,
+              viewport: { width: 1440, height: 1000 },
+              args: ["--disable-dev-shm-usage"],
+              ...(candidate.channel ? { channel: candidate.channel } : {}),
+              ...(candidate.executablePath
+                ? { executablePath: candidate.executablePath }
+                : {}),
+            }
+          );
+          this.context.setDefaultTimeout(15_000);
+          return this.context;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (isProfileBusyError(message)) {
+            throw new BrowserRuntimeError("PROFILE_BUSY", message);
+          }
+          if (isMissingBrowserError(message)) continue;
+          throw error;
+        }
+      }
+
+      throw new BrowserRuntimeError(
+        "BROWSER_NOT_INSTALLED",
+        "No supported browser was found. CGW tried: " +
+          attempted.join(", ") +
+          ". Install Microsoft Edge/Google Chrome on Windows or Chrome/Chromium on Linux. " +
+          "Advanced fallback: npx playwright install chromium. " +
+          "You can also set CGW_BROWSER_CHANNEL or CGW_BROWSER_EXECUTABLE."
+      );
     } catch (error) {
       this.lock?.release();
       this.lock = null;
+      if (error instanceof BrowserRuntimeError) throw error;
+
       const message = error instanceof Error ? error.message : String(error);
-      if (/already in use|profile.*use/i.test(message)) {
+      if (isProfileBusyError(message)) {
         throw new BrowserRuntimeError("PROFILE_BUSY", message);
       }
-      if (/executable.*doesn.t exist|browser.*not found|playwright.*install/i.test(message)) {
+      if (isMissingBrowserError(message)) {
         throw new BrowserRuntimeError(
           "BROWSER_NOT_INSTALLED",
-          "Playwright Chromium is not installed. Run: npx playwright install chromium " +
-            "(or --with-deps chromium on Linux)."
+          "No supported Chrome/Edge/Chromium browser was found."
         );
       }
       throw error;
