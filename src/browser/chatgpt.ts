@@ -3,6 +3,8 @@ import { Buffer } from "node:buffer";
 import type { Locator, Page } from "playwright";
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  ATTACH_BUTTON_SELECTORS,
+  ATTACHMENT_CHIP_SELECTOR,
   EFFORT_PICKER_SELECTORS,
   FILE_ASSET_SELECTOR,
   IMAGE_ASSET_SELECTOR,
@@ -11,6 +13,8 @@ import {
   PROMPT_SELECTORS,
   SEND_BUTTON_SELECTORS,
   STOP_BUTTON_SELECTORS,
+  UPLOAD_BUSY_SELECTOR,
+  UPLOAD_INPUT_SELECTORS,
   extractConversationId,
   isValidConversationId,
   normalizeText,
@@ -23,6 +27,11 @@ import {
   type ResponseManifest,
 } from "./response-extractor.js";
 import { AssetStore, AssetStoreError, type SavedAsset } from "../assets/store.js";
+import {
+  InputStore,
+  type InputAssetView,
+  type ResolvedInputAsset,
+} from "../inputs/store.js";
 import { CHATGPT_ORIGIN, type AppConfig } from "../config.js";
 import { BrowserRuntime } from "./runtime.js";
 
@@ -37,6 +46,9 @@ export type ChatGptErrorCode =
   | "MODEL_UNAVAILABLE"
   | "EFFORT_UNAVAILABLE"
   | "PROMPT_TOO_LARGE"
+  | "CONVERSATION_BUSY"
+  | "UPLOAD_UNAVAILABLE"
+  | "UPLOAD_UNCONFIRMED"
   | "ASSET_UNSAFE_ORIGIN"
   | "ASSET_RETRIEVAL_UNSUPPORTED";
 
@@ -67,6 +79,7 @@ export interface BrowserDispatchRequest {
   conversationId?: string;
   model?: string;
   effort?: string;
+  inputAssetIds?: string[];
 }
 
 export interface BrowserTurnDispatch {
@@ -94,6 +107,14 @@ async function firstVisible(page: Page, selectors: readonly string[]): Promise<L
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
     if (await locator.isVisible().catch(() => false)) return locator;
+  }
+  return null;
+}
+
+async function firstExisting(page: Page, selectors: readonly string[]): Promise<Locator | null> {
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    if ((await locator.count().catch(() => 0)) > 0) return locator;
   }
   return null;
 }
@@ -245,12 +266,15 @@ function decodeDataUrl(value: string): { bytes: Buffer; mime: string | null } {
 
 export class ChatGptWebClient {
   private readonly assetStore: AssetStore;
+  private readonly inputStore: InputStore;
 
   constructor(
     private readonly runtime: BrowserRuntime,
     private readonly config: AppConfig
   ) {
     this.assetStore = new AssetStore(config.stateDir);
+    this.inputStore = new InputStore(config.stateDir, config);
+    this.inputStore.cleanup();
   }
 
   private async navigate(page: Page, conversationId?: string): Promise<void> {
@@ -359,6 +383,39 @@ export class ChatGptWebClient {
     };
   }
 
+  stageTextInput(input: { filename: string; content: string; mime?: string }): InputAssetView {
+    return this.inputStore.stageText(input);
+  }
+
+  stageBlobInput(input: { filename: string; mime: string; dataBase64: string }): InputAssetView {
+    return this.inputStore.stageBlob(input);
+  }
+
+  createBlobInputSlot(input: {
+    filename: string;
+    mime: string;
+    sizeBytes: number;
+    sha256: string;
+  }) {
+    return this.inputStore.createBlobSlot(input);
+  }
+
+  commitBlobInputSlot(slotId: string): InputAssetView {
+    return this.inputStore.commitBlobSlot(slotId);
+  }
+
+  listStagedInputs(): InputAssetView[] {
+    return this.inputStore.list();
+  }
+
+  discardStagedInput(inputAssetId: string): { inputAssetId: string; discarded: boolean } {
+    return { inputAssetId, discarded: this.inputStore.discard(inputAssetId) };
+  }
+
+  cleanupStagedInputs(): { removed: number } {
+    return { removed: this.inputStore.cleanup() };
+  }
+
   private async applySelections(page: Page, model?: string, effort?: string): Promise<void> {
     if (model) await selectExact(page, MODEL_PICKER_SELECTORS, model, "MODEL_UNAVAILABLE");
     if (effort) {
@@ -368,6 +425,160 @@ export class ChatGptWebClient {
       } else {
         await selectExact(page, MODEL_PICKER_SELECTORS, effort, "EFFORT_UNAVAILABLE");
       }
+    }
+  }
+
+  private async composerScope(page: Page): Promise<Locator> {
+    const composer = await this.requireComposer(page);
+    const form = composer.locator("xpath=ancestor::form[1]");
+    if ((await form.count().catch(() => 0)) > 0) return form.first();
+
+    const withFileInput = composer.locator(
+      'xpath=ancestor::*[descendant::input[@type="file"]][1]'
+    );
+    if ((await withFileInput.count().catch(() => 0)) > 0) return withFileInput.first();
+
+    return composer.locator("xpath=..");
+  }
+
+  private async uploadInputBatch(
+    page: Page,
+    uploadInput: Locator,
+    assets: ResolvedInputAsset[],
+    beforeChips: number
+  ): Promise<void> {
+    const paths = assets.map((asset) => asset.path);
+    const filenames = assets.map((asset) => asset.record.filename);
+    await uploadInput.setInputFiles(paths);
+
+    const deadline = Date.now() + 30_000;
+    let confirmedSince: number | null = null;
+    while (Date.now() < deadline) {
+      const ui = await detectChatGptUiState(page);
+      throwForUiState(ui);
+
+      const scope = await this.composerScope(page);
+      let named = 0;
+      for (const filename of filenames) {
+        const visible = await scope
+          .getByText(filename, { exact: true })
+          .last()
+          .isVisible()
+          .catch(() => false);
+        if (visible) named++;
+      }
+
+      const chipCount = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
+      const busy = await scope.locator(UPLOAD_BUSY_SELECTOR).first().isVisible().catch(() => false);
+      const fileCount = await uploadInput
+        .evaluate((node) => (node as HTMLInputElement).files?.length ?? 0)
+        .catch(() => 0);
+      const sendReady = await firstVisible(page, SEND_BUTTON_SELECTORS)
+        .then((button) => button?.isEnabled().catch(() => false) ?? false)
+        .catch(() => false);
+
+      const strongEvidence =
+        named === filenames.length ||
+        chipCount >= beforeChips + filenames.length;
+      const fallbackEvidence =
+        fileCount === filenames.length && sendReady;
+
+      if ((strongEvidence || fallbackEvidence) && !busy) {
+        confirmedSince ??= Date.now();
+        if (Date.now() - confirmedSince >= 750) {
+          throwForUiState(await detectChatGptUiState(page));
+          return;
+        }
+      } else {
+        confirmedSince = null;
+      }
+      await page.waitForTimeout(250);
+    }
+
+    throw new ChatGptWebError(
+      "UPLOAD_UNCONFIRMED",
+      "ChatGPT did not expose a stable attachment state before the upload timeout; prompt was not sent."
+    );
+  }
+
+  private async requireUploadInput(page: Page): Promise<Locator> {
+    let scope = await this.composerScope(page);
+    let uploadInput: Locator | null = null;
+    for (const selector of UPLOAD_INPUT_SELECTORS) {
+      const candidate = scope.locator(selector).first();
+      if ((await candidate.count().catch(() => 0)) > 0) {
+        uploadInput = candidate;
+        break;
+      }
+    }
+    if (uploadInput) return uploadInput;
+
+    let attach: Locator | null = null;
+    for (const selector of ATTACH_BUTTON_SELECTORS) {
+      const candidate = scope.locator(selector).first();
+      if (await candidate.isVisible().catch(() => false)) {
+        attach = candidate;
+        break;
+      }
+    }
+    if (!attach) {
+      throw new ChatGptWebError(
+        "UPLOAD_UNAVAILABLE",
+        "Could not find a safe attachment control inside the ChatGPT composer."
+      );
+    }
+    await attach.click();
+    await page.waitForTimeout(250);
+    scope = await this.composerScope(page);
+    for (const selector of UPLOAD_INPUT_SELECTORS) {
+      const candidate = scope.locator(selector).first();
+      if ((await candidate.count().catch(() => 0)) > 0) {
+        uploadInput = candidate;
+        break;
+      }
+    }
+    if (!uploadInput) {
+      throw new ChatGptWebError(
+        "UPLOAD_UNAVAILABLE",
+        "Attachment control opened but no composer-scoped file input became available."
+      );
+    }
+    return uploadInput;
+  }
+
+  private async uploadInputs(page: Page, assets: ResolvedInputAsset[]): Promise<void> {
+    if (assets.length === 0) return;
+
+    const ui = await detectChatGptUiState(page);
+    throwForUiState(ui);
+    if (ui.state === "generating" || ui.state === "paused") {
+      throw new ChatGptWebError(
+        "CONVERSATION_BUSY",
+        "Cannot attach files while the current ChatGPT conversation is generating or paused."
+      );
+    }
+    if (ui.state !== "ready") {
+      throw new ChatGptWebError(
+        "UI_CHANGED",
+        "ChatGPT composer is not in a known ready state for attachment upload."
+      );
+    }
+
+    let uploadInput = await this.requireUploadInput(page);
+    const multiple = (await uploadInput.getAttribute("multiple")) !== null;
+    let scope = await this.composerScope(page);
+    let beforeChips = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
+
+    if (multiple || assets.length === 1) {
+      await this.uploadInputBatch(page, uploadInput, assets, beforeChips);
+      return;
+    }
+
+    for (const asset of assets) {
+      uploadInput = await this.requireUploadInput(page);
+      await this.uploadInputBatch(page, uploadInput, [asset], beforeChips);
+      scope = await this.composerScope(page);
+      beforeChips = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => beforeChips + 1);
     }
   }
 
@@ -381,14 +592,25 @@ export class ChatGptWebClient {
       );
     }
 
+    const resolvedInputs = this.inputStore.resolve(input.inputAssetIds ?? []);
+
     const page = await this.runtime.page();
     await this.navigate(page, input.conversationId);
     const composer = await this.requireComposer(page);
+    const preSendUi = await detectChatGptUiState(page);
+    throwForUiState(preSendUi);
+    if (preSendUi.state === "generating" || preSendUi.state === "paused") {
+      throw new ChatGptWebError(
+        "CONVERSATION_BUSY",
+        "Cannot send a new turn while the current conversation is generating or paused."
+      );
+    }
     await this.applySelections(page, input.model, input.effort);
 
     const baselineAssistantCount = await page.locator(ASSISTANT_MESSAGE_SELECTOR).count();
     await composer.fill(input.prompt);
     await page.waitForTimeout(100);
+    await this.uploadInputs(page, resolvedInputs);
 
     const send = await firstVisible(page, SEND_BUTTON_SELECTORS);
     if (send && (await send.isEnabled().catch(() => false))) await send.click();

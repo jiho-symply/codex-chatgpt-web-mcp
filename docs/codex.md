@@ -106,3 +106,23 @@ Recommended coding behavior:
 
 Never assume a generated `.patch` or code file is safe merely because ChatGPT
 created it.
+
+
+## Input attachments
+
+For small relevant excerpts, inline text in the prompt is usually simplest.
+
+For larger source files, logs, structured data, documents, or screenshots:
+
+1. Codex reads/selects the material using its own workspace capabilities.
+2. Use `chatgpt_stage_text` for UTF-8/code/log/data text, or
+   `chatgpt_stage_blob` for supported document/image bytes.
+3. Keep the returned `input_asset_id`.
+4. Pass only the intended ids in `input_asset_ids` on `chatgpt_send`.
+5. After upload, remember that local CGW TTL/discard controls only local staging,
+   not copies already uploaded to ChatGPT.
+
+Do not attempt to give CGW a workspace path. The absence of a path-based upload
+API is an intentional security boundary.
+
+See [input-attachments.md](input-attachments.md).

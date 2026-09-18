@@ -30,6 +30,10 @@ function parseInteger(value: string): number {
   return parsed;
 }
 
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
 function hasInteractiveDisplay(): boolean {
   if (process.platform === "win32" || process.platform === "darwin") return true;
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -135,6 +139,91 @@ program
   });
 
 program
+  .command("stage-text")
+  .description("Stage explicit UTF-8 text for a later ChatGPT attachment")
+  .requiredOption("--filename <name>")
+  .argument("<content>")
+  .option("--mime <mime>")
+  .action(async (content: string, opts: { filename: string; mime?: string }) => {
+    say(
+      await withContext(true, (client) =>
+        Promise.resolve(
+          client.stageTextInput({
+            filename: opts.filename,
+            content,
+            ...(opts.mime ? { mime: opts.mime } : {}),
+          })
+        )
+      )
+    );
+  });
+
+program
+  .command("stage-blob")
+  .description("Stage supported explicit binary bytes from base64 for a later attachment")
+  .requiredOption("--filename <name>")
+  .requiredOption("--mime <mime>")
+  .argument("<data-base64>")
+  .action(async (dataBase64: string, opts: { filename: string; mime: string }) => {
+    say(
+      await withContext(true, (client) =>
+        Promise.resolve(
+          client.stageBlobInput({
+            filename: opts.filename,
+            mime: opts.mime,
+            dataBase64,
+          })
+        )
+      )
+    );
+  });
+
+program
+  .command("create-blob-slot")
+  .description("Create a short-lived private CGW write slot for a large supported binary")
+  .requiredOption("--filename <name>")
+  .requiredOption("--mime <mime>")
+  .requiredOption("--size-bytes <n>", "exact byte size", parseInteger)
+  .requiredOption("--sha256 <hex>")
+  .action(async (opts: { filename: string; mime: string; sizeBytes: number; sha256: string }) => {
+    say(
+      await withContext(true, (client) =>
+        Promise.resolve(
+          client.createBlobInputSlot({
+            filename: opts.filename,
+            mime: opts.mime,
+            sizeBytes: opts.sizeBytes,
+            sha256: opts.sha256,
+          })
+        )
+      )
+    );
+  });
+
+program
+  .command("commit-blob-slot")
+  .description("Validate and commit a previously filled private CGW binary slot")
+  .argument("<slot-id>")
+  .action(async (slotId: string) => {
+    say(await withContext(true, (client) => Promise.resolve(client.commitBlobInputSlot(slotId))));
+  });
+
+program
+  .command("inputs")
+  .description("List active private staged inputs")
+  .action(async () => {
+    say(await withContext(true, (client) => Promise.resolve({ inputs: client.listStagedInputs() })));
+  });
+
+program
+  .command("discard-input")
+  .description("Discard one private staged input")
+  .argument("<input-asset-id>")
+  .action(async (inputAssetId: string) => {
+    say(await withContext(true, (client) => Promise.resolve(client.discardStagedInput(inputAssetId))));
+  });
+
+program
   .command("send")
   .description("Send a turn without waiting for completion")
   .argument("<prompt>", "prompt text")
@@ -142,10 +231,11 @@ program
   .option("--conversation <id>")
   .option("--model <label>")
   .option("--effort <label>")
+  .option("--input <id>", "staged input asset id; repeat for multiple attachments", collect, [])
   .action(
     async (
       prompt: string,
-      opts: { requestId: string; conversation?: string; model?: string; effort?: string }
+      opts: { requestId: string; conversation?: string; model?: string; effort?: string; input: string[] }
     ) => {
       say(
         await withContext(true, (_client, _runtime, turns) =>
@@ -155,6 +245,7 @@ program
             ...(opts.conversation ? { conversationId: opts.conversation } : {}),
             ...(opts.model ? { model: opts.model } : {}),
             ...(opts.effort ? { effort: opts.effort } : {}),
+            ...(opts.input.length ? { inputAssetIds: opts.input } : {}),
           })
         )
       );
@@ -206,6 +297,7 @@ program
   .option("--conversation <id>")
   .option("--model <label>")
   .option("--effort <label>")
+  .option("--input <id>", "staged input asset id; repeat for multiple attachments", collect, [])
   .option("--timeout-ms <n>", "overall generation timeout", parseInteger, 180_000)
   .action(
     async (
@@ -215,6 +307,7 @@ program
         conversation?: string;
         model?: string;
         effort?: string;
+        input: string[];
         timeoutMs: number;
       }
     ) => {
@@ -226,6 +319,7 @@ program
           ...(opts.conversation ? { conversationId: opts.conversation } : {}),
           ...(opts.model ? { model: opts.model } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
+          ...(opts.input.length ? { inputAssetIds: opts.input } : {}),
         })
       );
       say(result);

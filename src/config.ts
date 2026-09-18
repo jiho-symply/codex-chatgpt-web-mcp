@@ -8,6 +8,11 @@ export const DEFAULT_STABLE_MS = 5_000;
 export const MAX_PROMPT_BYTES = 512 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
+export const MAX_STAGED_TEXT_BYTES = 4 * 1024 * 1024;
+export const MAX_INPUT_ASSET_BYTES = 20 * 1024 * 1024;
+export const MAX_INPUT_TOTAL_BYTES = 50 * 1024 * 1024;
+export const MAX_INPUT_ATTACHMENTS = 10;
+export const DEFAULT_INPUT_TTL_HOURS = 24;
 
 export interface AppConfig {
   stateDir: string;
@@ -19,6 +24,11 @@ export interface AppConfig {
   maxPromptBytes: number;
   maxResponseBytes: number;
   maxAssetBytes: number;
+  maxStagedTextBytes: number;
+  maxInputAssetBytes: number;
+  maxInputTotalBytes: number;
+  maxInputAttachments: number;
+  inputTtlMs: number;
 }
 
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
@@ -89,5 +99,14 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
     maxPromptBytes: MAX_PROMPT_BYTES,
     maxResponseBytes: MAX_RESPONSE_BYTES,
     maxAssetBytes: MAX_ASSET_BYTES,
+    maxStagedTextBytes: MAX_STAGED_TEXT_BYTES,
+    maxInputAssetBytes: MAX_INPUT_ASSET_BYTES,
+    maxInputTotalBytes: MAX_INPUT_TOTAL_BYTES,
+    maxInputAttachments: MAX_INPUT_ATTACHMENTS,
+    inputTtlMs:
+      intEnv(process.env.CGW_INPUT_TTL_HOURS, DEFAULT_INPUT_TTL_HOURS, 1, 168) *
+      60 *
+      60 *
+      1000,
   };
 }

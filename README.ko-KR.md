@@ -33,7 +33,7 @@ ChatGPT가 직접 갖는 권한은 없습니다.
 - patch apply 없음
 - browser profile/cookie 읽기 도구 없음
 
-ChatGPT는 Codex가 메시지에 넣어준 텍스트만 봅니다.
+ChatGPT는 Codex가 명시적으로 선택한 prompt와 staged attachment만 봅니다.
 
 ## 왜 이 구조인가
 
@@ -110,6 +110,30 @@ Codex가 검증/적용/테스트
 
 Codex는 필요한 코드만 prompt에 포함시키고, 반환된 코드/diff를 로컬에서 검증한
 뒤 적용할 수 있습니다.
+
+## 명시적 입력 첨부
+
+Codex가 선택한 자료를 ChatGPT Web에 첨부할 수 있지만, proxy에 임의 filesystem
+read 권한을 주지는 않습니다.
+
+추가 도구:
+
+- `chatgpt_stage_text`
+- `chatgpt_stage_blob`
+- 큰 binary용 `chatgpt_create_blob_slot` / `chatgpt_commit_blob_slot`
+- `chatgpt_list_staged_inputs`
+- `chatgpt_discard_staged_input`
+
+staging 결과의 `input_asset_id`를 `chatgpt_send` 또는 `chatgpt_chat`의
+`input_asset_ids`에 넘기면 그때 실제 ChatGPT Web 첨부가 발생합니다.
+
+MCP는 local path를 입력으로 받지 않습니다. Source code, diff, log, Markdown,
+CSV/TSV, JSON/XML/YAML 등은 text staging으로 처리하고, binary는 PDF, DOCX,
+PPTX, XLSX/XLS, PNG/JPEG/GIF만 허용합니다.
+
+.env, private key, credential/secret 계열 파일과 archive/executable/unknown
+binary는 차단합니다. 자세한 내용은
+[docs/input-attachments.md](docs/input-attachments.md)를 참고하세요.
 
 ## 구조화된 응답 처리
 
@@ -228,7 +252,7 @@ Codex
  └─ git
 ```
 
-ChatGPT는 이 과정에서 Codex나 local workspace의 존재를 알 필요가 없습니다.
+ChatGPT는 이 과정에서 Codex나 local workspace의 존재를 알 필요가 없으며, Codex가 명시적으로 선택한 prompt/attachment만 전달받습니다.
 
 ## Headless Linux
 

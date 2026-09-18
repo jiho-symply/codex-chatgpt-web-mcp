@@ -9,7 +9,7 @@
 │  ┌────────────┐       MCP stdio      ┌───────────────┐  │
 │  │   Codex    │─────────────────────▶│ Web Proxy MCP │  │
 │  │            │◀─────────────────────│               │  │
-│  │ repo/shell │    response text     │ browser only  │  │
+│  │ repo/shell │ response manifest    │ browser only  │  │
 │  └────────────┘                      └───────┬───────┘  │
 │                                             │           │
 └─────────────────────────────────────────────┼───────────┘
@@ -44,6 +44,8 @@ The server is responsible only for:
 - fixed-origin navigation
 - conversation reuse
 - live model/effort picker discovery
+- explicit caller-provided input staging
+- validated ChatGPT attachment upload
 - idempotent prompt dispatch
 - persistent local turn metadata
 - bounded generation polling and timeout recovery
@@ -53,7 +55,7 @@ The server is responsible only for:
 
 ### ChatGPT Web
 
-ChatGPT receives an ordinary chat message. It does not receive a repository
+ChatGPT receives an ordinary chat message plus only the attachments explicitly staged and referenced by Codex. It does not receive a repository
 connector from this project and does not know the caller's local orchestration
 state unless Codex explicitly puts that information into the prompt.
 
@@ -84,6 +86,25 @@ This prevents:
 - model selection from one request affecting another
 - prompts landing in the wrong conversation
 - response extraction races
+
+## Input boundary
+
+```text
+Codex workspace access
+      │
+      │ explicit text/base64 only
+      ▼
+private CGW input staging
+      │
+      │ opaque input_asset_id
+      ▼
+ChatGPT attachment UI
+```
+
+The MCP has no arbitrary filesystem-read or directory-upload capability.
+Staged input is integrity-checked again before each upload.
+
+See [input-attachments.md](input-attachments.md).
 
 ## Turn lifecycle
 

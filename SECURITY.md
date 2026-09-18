@@ -8,7 +8,7 @@ The security boundary is:
 
 - **Codex owns local code and execution.**
 - **The MCP proxy owns only an authenticated ChatGPT browser profile.**
-- **ChatGPT receives only prompt text and returns only response text.**
+- **ChatGPT receives only explicit prompt text and explicitly staged attachments; outputs return as response text/manifests/assets.**
 
 The MCP server has no repository root input and exposes no filesystem, shell,
 Git, package-manager, patch-apply, or generic navigation tool.
@@ -23,10 +23,9 @@ A response may contain incorrect code, destructive shell commands, prompt
 injection, or a malicious-looking patch. Codex must independently review and
 validate it before use.
 
-### Prompt content
+### Prompt and attachment content
 
-Prompt text is sent to ChatGPT Web. Codex should include only the minimum
-workspace context required for the task.
+Prompt text and any referenced staged attachments are sent to ChatGPT Web. Codex should include only the minimum workspace context required for the task.
 
 This proxy cannot determine whether source code is confidential. The caller is
 responsible for data-minimization and policy compliance.
@@ -49,6 +48,10 @@ The persistent browser profile contains authentication state and is sensitive.
 | ChatGPT gains workspace access | Impossible through this MCP surface: there is no workspace tool or mount |
 | ChatGPT runs local commands | No shell/process execution tool is exposed |
 | Malicious model-generated patch | Returned as text only; proxy cannot apply it |
+| Arbitrary local-file exfiltration | Input tools never accept filesystem paths; only caller-provided text/base64 bytes can enter private staging |
+| Secret/credential attachment | Sensitive filenames, obvious private-key/token material, archives/executables and unknown binary are rejected before staging |
+| Staged-input tampering | SHA-256, size, regular-file and symlink checks run again immediately before browser upload |
+| Stale staged input | Private input staging expires automatically by TTL; expiry is local only and does not imply remote ChatGPT deletion |
 | Cookie/token exfiltration through MCP | No cookie/storage/profile read tools exist |
 | Remote MCP exposure | MCP transport is stdio only; no TCP listener |
 | Arbitrary browser navigation | Navigation is fixed to `https://chatgpt.com` and validated conversation URLs |
@@ -74,6 +77,23 @@ response bodies.
 
 Turn-state files use owner-only permissions where supported and reject
 symlinked state files.
+
+## Explicit input staging
+
+The proxy has no caller-selected local path/directory/repository upload API.
+
+Codex must explicitly provide text/base64 bytes, or use a CGW-created one-time
+binary write slot. A slot exposes only a destination path inside CGW's private
+input inbox; CGW still never receives a caller-selected source path. Staged
+input files live under private application state, use owner-only permissions
+where supported, are size/integrity checked, and expire automatically.
+
+The sensitive-input detector is a guardrail, not a complete DLP system. The
+caller remains responsible for minimizing source/data sent to ChatGPT.
+
+Once `input_asset_ids` are passed to `chatgpt_send`/`chatgpt_chat`, those
+bytes are uploaded to ChatGPT Web. Local staging deletion or TTL cleanup does
+not delete already-uploaded content from the ChatGPT account/service.
 
 ## Structured response extraction
 
