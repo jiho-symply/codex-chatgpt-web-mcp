@@ -459,7 +459,10 @@ export class ChatGptWebClient {
       const paused = ui.state === "paused";
       const generating = ui.state === "generating";
       const complete =
-        Boolean(response) && !generating && !paused && (copyVisible || stableLongEnough);
+        Boolean(response) &&
+        !generating &&
+        !paused &&
+        (copyVisible || (ui.state === "ready" && stableLongEnough));
 
       if (complete || paused || input.timeoutMs === 0) {
         const bounded = truncateUtf8(response ?? "", this.config.maxResponseBytes);
@@ -701,18 +704,27 @@ export class ChatGptWebClient {
       bytes = Buffer.from(encoded.base64, "base64");
       mime = mime ?? encoded.type;
     } else {
-      const url = safeAssetUrl(source.href, page.url());
-      const response = await page.context().request.get(url.toString(), {
+      let url = safeAssetUrl(source.href, page.url());
+      let response = await page.context().request.get(url.toString(), {
         timeout: 30_000,
-        maxRedirects: 5,
+        maxRedirects: 0,
       });
+      for (let redirect = 0; redirect < 5 && response.status() >= 300 && response.status() < 400; redirect++) {
+        const location = response.headers()["location"];
+        if (!location) break;
+        url = safeAssetUrl(location, url.toString());
+        response = await page.context().request.get(url.toString(), {
+          timeout: 30_000,
+          maxRedirects: 0,
+        });
+      }
       if (!response.ok()) {
         throw new ChatGptWebError(
           "ASSET_RETRIEVAL_UNSUPPORTED",
           "ChatGPT asset request failed with HTTP " + response.status() + "."
         );
       }
-      safeAssetUrl(response.url(), page.url());
+      safeAssetUrl(response.url(), url.toString());
       const contentLength = Number(response.headers()["content-length"] ?? "0");
       if (contentLength > this.config.maxAssetBytes) {
         throw new AssetStoreError(
@@ -721,6 +733,12 @@ export class ChatGptWebClient {
         );
       }
       bytes = Buffer.from(await response.body());
+      if (bytes.length > this.config.maxAssetBytes) {
+        throw new AssetStoreError(
+          "ASSET_TOO_LARGE",
+          "Asset body is " + bytes.length + " bytes; limit is " + this.config.maxAssetBytes + "."
+        );
+      }
       mime = mime ?? response.headers()["content-type"] ?? null;
     }
 
