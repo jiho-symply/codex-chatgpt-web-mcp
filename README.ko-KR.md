@@ -120,6 +120,7 @@ read 권한을 주지는 않습니다.
 
 - `chatgpt_stage_text`
 - `chatgpt_stage_blob`
+- 큰 binary용 `chatgpt_create_blob_slot` / `chatgpt_commit_blob_slot`
 - `chatgpt_list_staged_inputs`
 - `chatgpt_discard_staged_input`
 
