@@ -179,6 +179,36 @@ program
   });
 
 program
+  .command("create-blob-slot")
+  .description("Create a short-lived private CGW write slot for a large supported binary")
+  .requiredOption("--filename <name>")
+  .requiredOption("--mime <mime>")
+  .requiredOption("--size-bytes <n>", "exact byte size", parseInteger)
+  .requiredOption("--sha256 <hex>")
+  .action(async (opts: { filename: string; mime: string; sizeBytes: number; sha256: string }) => {
+    say(
+      await withContext(true, (client) =>
+        Promise.resolve(
+          client.createBlobInputSlot({
+            filename: opts.filename,
+            mime: opts.mime,
+            sizeBytes: opts.sizeBytes,
+            sha256: opts.sha256,
+          })
+        )
+      )
+    );
+  });
+
+program
+  .command("commit-blob-slot")
+  .description("Validate and commit a previously filled private CGW binary slot")
+  .argument("<slot-id>")
+  .action(async (slotId: string) => {
+    say(await withContext(true, (client) => Promise.resolve(client.commitBlobInputSlot(slotId))));
+  });
+
+program
   .command("inputs")
   .description("List active private staged inputs")
   .action(async () => {
