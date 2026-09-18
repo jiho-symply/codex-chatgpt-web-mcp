@@ -21,12 +21,12 @@ https://github.com/jiho-symply/codex-chatgpt-web-mcp
 개발/source-build 방식이 아니라 일반 사용자 설치 절차를 사용해.
 현재 작업 중인 project 파일은 수정하지 마.
 
-1. Node.js >= 20, Git, 그리고 Edge/Chrome/Chromium 중 지원 브라우저가 있는지 확인해.
+1. Node.js >= 20과 Edge/Chrome/Chromium 중 지원 브라우저가 있는지 확인해.
 2. 다음 명령을 실행해:
-   npx -y github:jiho-symply/codex-chatgpt-web-mcp login
+   npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
    ChatGPT 로그인, CAPTCHA, 2FA처럼 사람의 조작이 필요하면 브라우저를 열어둔 채 나에게 완료해달라고 요청하고 기다려.
 3. 다음 명령으로 MCP를 Codex에 등록해:
-   codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+   codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
 4. 다음 명령으로 등록을 확인해:
    codex mcp list
 5. 문서화된 npx 방식이 실제로 실패하기 전에는 repository를 clone/build하지 마.
@@ -41,17 +41,17 @@ Codex에 local shell 실행 권한이 있으면 설치와 등록은 스스로 �
 
 ## 직접 설치
 
-요구사항: **Node.js 20+**, **Git**, 로컬 브라우저.
+요구사항: **Node.js 20+**, 로컬 브라우저.
 
 - Windows: Microsoft Edge 또는 Google Chrome
 - Linux: Google Chrome 또는 Chromium
 
 ```bash
 # 최초 1회 ChatGPT 로그인
-npx -y github:jiho-symply/codex-chatgpt-web-mcp login
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
 
 # Codex에 CGW 등록
-codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
 ```
 
 확인:
