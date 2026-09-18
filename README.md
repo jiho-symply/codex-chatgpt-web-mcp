@@ -37,7 +37,7 @@ ChatGPT browser session and returns normal assistant responses to Codex.
 ┌──────────────────────────────┐
 │       ChatGPT Web            │
 │                              │
-│ sees prompt text only        │
+│ explicit prompt/attachments  │
 │ no repo / shell / MCP access │
 └──────────────────────────────┘
 ```
@@ -49,7 +49,7 @@ origin.
 ## Security properties
 
 - **Workspace isolation by architecture** — ChatGPT never receives repository
-  access through this MCP server. Codex chooses exactly what text to send.
+  access through this MCP server. Codex chooses exactly what prompt text and staged attachments to send.
 - **No execution capability** — ChatGPT responses are untrusted text. The proxy
   cannot apply patches, run commands, install packages, or modify Git state.
 - **Local stdio transport** — the MCP server opens no TCP listener.
@@ -186,7 +186,7 @@ Codex remains the orchestrator:
 8. Codex may reuse the conversation and send the resulting diff/test summary for review.
 ```
 
-ChatGPT does not need to know that Codex is the caller.
+ChatGPT does not need to know that Codex is the caller; it only receives the prompt and attachments Codex explicitly selected.
 
 ## Explicit input attachments
 
