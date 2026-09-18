@@ -41,7 +41,8 @@ The server is responsible only for:
 
 - persistent browser lifecycle
 - ChatGPT authentication-state detection
-- fixed-origin navigation
+- workspace→Project binding with Project-only-memory verification
+- project-aware fixed-origin navigation
 - conversation reuse
 - live model/effort picker discovery
 - explicit caller-provided input staging
@@ -105,6 +106,36 @@ The MCP has no arbitrary filesystem-read or directory-upload capability.
 Staged input is integrity-checked again before each upload.
 
 See [input-attachments.md](input-attachments.md).
+
+## Workspace Project boundary
+
+```text
+local workspace identity
+      │ hash locally
+      ▼
+opaque ws_<hex>
+      │
+      ▼
+private CGW mapping
+      │
+      └── exact g-p-<id>
+             │
+             ▼
+      ChatGPT Project
+      (Project-only memory)
+             │
+             ├─ fresh chat
+             └─ continued chat
+```
+
+The raw workspace path/remote never has to cross MCP. CGW does not search
+existing Projects by name. A missing binding creates a new Project only if
+Project-only memory can be selected and verified.
+
+Fresh sends navigate to Project home; continuations use the exact Project-aware
+thread URL. Project identity is carried in turn/output-asset state.
+
+See [workspace-project-isolation.md](workspace-project-isolation.md).
 
 ## Turn lifecycle
 

@@ -62,6 +62,9 @@ origin.
 - **Fixed origin** — browser automation is restricted to `https://chatgpt.com`.
 - **Serialized requests** — one browser profile is used by one request at a
   time to prevent cross-conversation races.
+- **Workspace Project isolation** — each opaque workspace identity maps to one
+  exact ChatGPT Project with Project-only memory; destination identity is
+  verified before and after sends.
 - **Bounded I/O** — prompt, response, and explicitly retrieved asset sizes are capped locally.
 - **Private asset staging** — generated response assets are never downloaded to the workspace automatically.
 - **Explicit input staging** — ChatGPT attachments must be supplied as caller-provided text/base64 bytes; the proxy never reads arbitrary local paths.
@@ -188,6 +191,44 @@ Codex remains the orchestrator:
 
 ChatGPT does not need to know that Codex is the caller; it only receives the prompt and attachments Codex explicitly selected.
 
+## Workspace → Project isolation
+
+Version 0.5 uses one exact ChatGPT Project per local Codex workspace by default.
+
+The caller derives an opaque local `workspace_id` such as
+`ws_8d836fa94e80b7ef21014b10`, then binds it once:
+
+```text
+chatgpt_bind_workspace(workspace_id, workspace_name?, naming_mode?)
+```
+
+When no binding exists, CGW creates a **new** ChatGPT Project only after
+Project-only memory is visibly selected and verified. It never silently adopts
+an existing same-name Project and never falls back to a default-memory Project.
+
+After binding, pass `workspace_id` on every `chatgpt_send` /
+`chatgpt_chat` call. Before every workspace send, CGW reopens Project settings
+and verifies that Project-only memory is still selected:
+
+```text
+workspace A → Project A → fresh/continued chats
+workspace B → Project B → fresh/continued chats
+```
+
+New sends without a `conversation_id` start from the exact Project home, so
+they create a fresh chat inside that Project. Continued sends reopen the exact
+project-aware conversation URL.
+
+Project isolation is required by default. Set
+`CGW_REQUIRE_WORKSPACE_PROJECT=false` only for intentional legacy/general-chat
+use.
+
+Project naming can expose the workspace display name or be anonymous. Raw
+workspace paths and Git remote URLs must never be sent as `workspace_id`.
+
+See
+[docs/workspace-project-isolation.md](docs/workspace-project-isolation.md).
+
 ## Explicit input attachments
 
 Codex can attach explicitly selected material without granting the proxy
@@ -286,6 +327,7 @@ methods for the first login, then remove the display service.
 | `CGW_TIMEOUT_MS` | `180000` | Default ChatGPT generation timeout |
 | `CGW_STABLE_MS` | `5000` | Fallback text-stability interval used when no Copy control is detectable |
 | `CGW_INPUT_TTL_HOURS` | `24` | Local private input-staging TTL (1-168 hours) |
+| `CGW_REQUIRE_WORKSPACE_PROJECT` | `true` | Require a verified workspace→Project binding on sends |
 
 Response asset retrieval is capped at 25 MiB per asset.
 

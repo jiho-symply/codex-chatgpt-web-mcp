@@ -152,11 +152,43 @@ export function extractConversationId(url: string): string | null {
   try {
     const parsed = new URL(url);
     if (parsed.hostname !== "chatgpt.com" && parsed.hostname !== "www.chatgpt.com") return null;
-    const match = parsed.pathname.match(/^\/c\/([A-Za-z0-9-]{8,128})(?:\/)?$/);
-    return match?.[1] ?? null;
+    const root = parsed.pathname.match(/^\/c\/([A-Za-z0-9-]{8,128})(?:\/)?$/);
+    if (root?.[1]) return root[1];
+    const project = parsed.pathname.match(
+      /^\/g\/g-p-[0-9a-f]{1,128}(?:-[^/]+)?\/c\/([A-Za-z0-9-]{8,128})(?:\/)?$/i
+    );
+    return project?.[1] ?? null;
   } catch {
     return null;
   }
+}
+
+export function extractProjectId(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || (parsed.hostname !== "chatgpt.com" && parsed.hostname !== "www.chatgpt.com")) {
+      return null;
+    }
+    const match = parsed.pathname.match(/^\/g\/(g-p-[0-9a-f]{1,128})(?:-[^/]+)?\/(?:project|c\/[^/]+)(?:\/)?$/i);
+    return match?.[1]?.toLowerCase() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function isValidProjectId(value: string): boolean {
+  return /^g-p-[0-9a-f]{1,128}$/i.test(value);
+}
+
+export function projectHomeUrl(projectId: string): string {
+  if (!isValidProjectId(projectId)) throw new Error("Invalid ChatGPT project id.");
+  return "https://chatgpt.com/g/" + projectId.toLowerCase() + "/project";
+}
+
+export function projectConversationUrl(projectId: string, conversationId: string): string {
+  if (!isValidProjectId(projectId)) throw new Error("Invalid ChatGPT project id.");
+  if (!isValidConversationId(conversationId)) throw new Error("Invalid ChatGPT conversation id.");
+  return "https://chatgpt.com/g/" + projectId.toLowerCase() + "/c/" + conversationId;
 }
 
 export function isValidConversationId(value: string): boolean {

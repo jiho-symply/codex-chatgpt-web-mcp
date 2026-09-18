@@ -43,12 +43,16 @@ mutated.
 Production navigation is restricted to:
 
 - `https://chatgpt.com/`
-- validated `https://chatgpt.com/c/<conversation_id>`
+- validated legacy `https://chatgpt.com/c/<conversation_id>`
+- validated Project homes `https://chatgpt.com/g/g-p-<id>/project`
+- validated Project threads `https://chatgpt.com/g/g-p-<id>[-slug]/c/<conversation_id>`
 
 There is no MCP tool that accepts an arbitrary URL.
 
 Conversation mismatches fail closed with `SESSION_LOST` or
-`CONVERSATION_NOT_FOUND`.
+`CONVERSATION_NOT_FOUND`. Workspace sends additionally verify the exact
+Project id and Project-bound composer before typing and the landed Project id
+after sending.
 
 ## Response completion
 

@@ -29,6 +29,7 @@ export interface AppConfig {
   maxInputTotalBytes: number;
   maxInputAttachments: number;
   inputTtlMs: number;
+  requireWorkspaceProject: boolean;
 }
 
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
@@ -108,5 +109,6 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
       60 *
       60 *
       1000,
+    requireWorkspaceProject: boolEnv(process.env.CGW_REQUIRE_WORKSPACE_PROJECT, true),
   };
 }

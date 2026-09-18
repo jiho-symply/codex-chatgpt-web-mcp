@@ -10,6 +10,8 @@ export interface TurnRecord {
   requestId: string;
   payloadHash: string;
   conversationId: string | null;
+  workspaceId: string | null;
+  projectId: string | null;
   baselineAssistantCount: number | null;
   status: TurnStatus;
   requestedModel: string | null;
@@ -93,6 +95,7 @@ export function payloadHash(input: {
   model?: string;
   effort?: string;
   inputAssetIds?: string[];
+  workspaceId?: string;
 }): string {
   return createHash("sha256")
     .update(
@@ -102,6 +105,7 @@ export function payloadHash(input: {
         model: input.model ?? null,
         effort: input.effort ?? null,
         inputAssetIds: input.inputAssetIds ?? [],
+        workspaceId: input.workspaceId ?? null,
       })
     )
     .digest("hex");
@@ -134,6 +138,7 @@ export class TurnStore {
     conversationId?: string;
     model?: string;
     effort?: string;
+    workspaceId?: string;
   }): { record: TurnRecord; deduplicated: boolean } {
     const requestId = validateRequestId(input.requestId);
     const state = readState(this.stateDir);
@@ -142,7 +147,7 @@ export class TurnStore {
       if (existing.payloadHash !== input.payloadHash) {
         throw new TurnStoreError(
           "REQUEST_ID_CONFLICT",
-          "request_id was already used with different prompt/model/conversation/attachment inputs."
+          "request_id was already used with different prompt/model/conversation/attachment/workspace inputs."
         );
       }
       return { record: existing, deduplicated: true };
@@ -155,6 +160,8 @@ export class TurnStore {
       requestId,
       payloadHash: input.payloadHash,
       conversationId: input.conversationId ?? null,
+      workspaceId: input.workspaceId ?? null,
+      projectId: null,
       baselineAssistantCount: null,
       status: "reserved",
       requestedModel: input.model ?? null,
@@ -180,6 +187,8 @@ export class TurnStore {
       Pick<
         TurnRecord,
         | "conversationId"
+        | "workspaceId"
+        | "projectId"
         | "baselineAssistantCount"
         | "status"
         | "completedAt"
