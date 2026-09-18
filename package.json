@@ -1,7 +1,7 @@
 {
   "name": "codex-chatgpt-web-mcp",
-  "version": "0.8.1",
-  "description": "A secure browser-backed MCP server that lets Codex use ChatGPT Web without exposing the workspace to ChatGPT.",
+  "version": "0.9.0",
+  "description": "Use authenticated ChatGPT Web as a browser-backed MCP backend for OpenAI Codex without exposing the workspace to ChatGPT.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -32,5 +32,30 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jiho-symply/codex-chatgpt-web-mcp.git"
+  },
+  "keywords": [
+    "codex",
+    "mcp",
+    "chatgpt",
+    "chatgpt-web",
+    "playwright",
+    "browser-automation",
+    "coding-agent"
+  ],
+  "homepage": "https://github.com/jiho-symply/codex-chatgpt-web-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/jiho-symply/codex-chatgpt-web-mcp/issues"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "docs/",
+    "LICENSE",
+    "README.md",
+    "README.ko-KR.md",
+    "SECURITY.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
