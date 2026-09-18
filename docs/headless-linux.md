@@ -27,7 +27,7 @@ When X11 forwarding is available:
 
 ```bash
 ssh -X user@server
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login
+npx -y codex-chatgpt-web-mcp@latest login
 ```
 
 Complete login in the opened browser.
@@ -37,7 +37,7 @@ Complete login in the opened browser.
 Create a temporary graphical session on the server, run:
 
 ```bash
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login
+npx -y codex-chatgpt-web-mcp@latest login
 ```
 
 Complete authentication, then shut down the temporary desktop service.
@@ -47,7 +47,7 @@ another network attack surface.
 
 ### Option C: existing graphical session on the same trusted host
 
-Run `npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login` once in that session, then use the same OS account/state
+Run `npx -y codex-chatgpt-web-mcp@latest login` once in that session, then use the same OS account/state
 directory for headless MCP operation.
 
 ## Xvfb note
@@ -56,7 +56,7 @@ Xvfb by itself creates a display but does not let a remote human see it.
 Therefore:
 
 ```bash
-xvfb-run -a npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login
+xvfb-run -a npx -y codex-chatgpt-web-mcp@latest login
 ```
 
 is only useful if you also have a secure way to view/interact with that display.
@@ -67,8 +67,8 @@ Do not expose an unauthenticated VNC/noVNC endpoint.
 Verify headless access:
 
 ```bash
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz doctor
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz models
+npx -y codex-chatgpt-web-mcp@latest doctor
+npx -y codex-chatgpt-web-mcp@latest models
 ```
 
 Then register Codex as described in [installation.md](installation.md).

@@ -15,3 +15,4 @@ documented here.
 | ChatGPT Web UI states | [web-ui-state.md](web-ui-state.md) |
 | Headless Linux login | [headless-linux.md](headless-linux.md) |
 | Security model | [../SECURITY.md](../SECURITY.md) |
+| Maintainer npm releases | [releasing.md](releasing.md) |

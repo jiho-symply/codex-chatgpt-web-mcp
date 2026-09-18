@@ -22,9 +22,12 @@ jobs:
 
       - run: npm install
       - run: node bin/cgw.mjs --version
-      - name: Smoke test GitHub tarball npx install
-        env:
-          CGW_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: npx -y "https://github.com/${GITHUB_REPOSITORY}/archive/${CGW_GIT_SHA}.tar.gz" --version
+      - name: Smoke test packed npm artifact
+        shell: bash
+        run: |
+          TARBALL="$(npm pack --silent)"
+          EXPECTED="$(node -p "require('./package.json').version")"
+          ACTUAL="$(npx -y "./${TARBALL}" --version)"
+          test "${ACTUAL}" = "${EXPECTED}"
       - run: npm run typecheck
       - run: npm test
