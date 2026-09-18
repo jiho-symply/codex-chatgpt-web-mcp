@@ -63,6 +63,15 @@ describe("TurnStore", () => {
     ).toThrowError(TurnStoreError);
   });
 
+  it("includes workspace identity in the idempotency payload hash", () => {
+    const base = { prompt: "same task" };
+    expect(
+      payloadHash({ ...base, workspaceId: "ws_0123456789abcdef" })
+    ).not.toBe(
+      payloadHash({ ...base, workspaceId: "ws_fedcba9876543210" })
+    );
+  });
+
   it("persists turn progress across store instances", () => {
     const dir = tmp();
     const first = new TurnStore(dir);
