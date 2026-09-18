@@ -15,7 +15,7 @@ export interface WorkspaceProjectBinding {
   projectUrl: string;
   memoryMode: "project-only";
   memoryVerifiedAt: string | null;
-  memoryVerificationSource: "creation" | null;
+  memoryVerificationSource: "creation" | "settings" | null;
   status: WorkspaceProjectStatus;
   createdAt: string;
   updatedAt: string;
