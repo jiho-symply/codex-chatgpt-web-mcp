@@ -51,7 +51,8 @@ path.
 
 ### chatgpt_stage_blob
 
-Use for supported binary document/image inputs.
+Use for small supported binary document/image inputs when passing base64 through
+the MCP call is practical.
 
 Current allowlist:
 
@@ -70,6 +71,24 @@ Binary MIME, filename extension, and file signature must agree.
 
 ZIP/TAR/7z/RAR, executables, libraries, JAR/WAR, unknown binary, and macro-enabled
 Office formats are intentionally unsupported.
+
+### chatgpt_create_blob_slot / chatgpt_commit_blob_slot
+
+For larger binary files, avoid sending large base64 through a model/tool call.
+
+1. Codex computes the intended file's exact size and SHA-256 using its own local
+   capabilities.
+2. Call `chatgpt_create_blob_slot(filename, mime, size_bytes, sha256)`.
+3. CGW returns a short-lived `slot_id` and one private `writePath` under
+   CGW's input inbox.
+4. Codex copies/writes only the intended bytes to that exact path.
+5. Call `chatgpt_commit_blob_slot(slot_id)`.
+6. CGW verifies exact size, SHA-256, MIME/extension, file signature, regular-file
+   status, and expiry before returning an `input_asset_id`.
+
+The slot expires after 15 minutes and is cleaned automatically. This is not an
+arbitrary path API: CGW creates the destination and never receives a
+caller-selected source path.
 
 ### chatgpt_list_staged_inputs
 
@@ -144,6 +163,7 @@ Defaults:
 
 - text staging: 4 MiB per item
 - binary input: 20 MiB per item
+- one-time binary write slot: 15 minute expiry
 - combined input attachments per turn: 50 MiB
 - attachments per turn: 10
 - local staging TTL: 24 hours
