@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { Buffer } from "node:buffer";
 import type { Locator, Page } from "playwright";
 import {
@@ -330,7 +329,10 @@ export class ChatGptWebClient {
     ui: ChatGptUiSnapshot;
   }> {
     const page = await this.runtime.page();
-    await this.navigate(page);
+    await page.goto(CHATGPT_ORIGIN, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
     const ui = await detectChatGptUiState(page);
     const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 2_000);
     const authenticated = !["auth_required", "challenge_required"].includes(ui.state);
@@ -606,6 +608,9 @@ export class ChatGptWebClient {
     let bytes: Buffer;
     let mime = source.mime;
     if (source.href.startsWith("data:")) {
+      if (source.href.length > this.config.maxAssetBytes * 2) {
+        throw new AssetStoreError("ASSET_TOO_LARGE", "Encoded data URL exceeds the configured asset limit.");
+      }
       const decoded = decodeDataUrl(source.href);
       bytes = decoded.bytes;
       mime = mime ?? decoded.mime;
@@ -621,6 +626,9 @@ export class ChatGptWebClient {
         }
         return { base64: btoa(binary), type: response.headers.get("content-type") };
       }, source.href);
+      if (encoded.base64.length > this.config.maxAssetBytes * 2) {
+        throw new AssetStoreError("ASSET_TOO_LARGE", "Encoded blob exceeds the configured asset limit.");
+      }
       bytes = Buffer.from(encoded.base64, "base64");
       mime = mime ?? encoded.type;
     } else {
