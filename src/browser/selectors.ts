@@ -25,6 +25,17 @@ export const CONTINUE_BUTTON_SELECTORS = [
   "button:has-text(\"계속 생성\")",
 ] as const;
 
+export const RETRY_BUTTON_SELECTORS = [
+  "button:has-text(\"Retry\")",
+  "button:has-text(\"Try again\")",
+  "button:has-text(\"다시 시도\")",
+] as const;
+
+export const REGENERATE_BUTTON_SELECTORS = [
+  "button:has-text(\"Regenerate\")",
+  "button:has-text(\"다시 생성\")",
+] as const;
+
 export const COPY_BUTTON_SELECTORS = [
   "button[data-testid*=\"copy\"]",
   "button[aria-label*=\"Copy\" i]",
@@ -52,6 +63,38 @@ export const PICKER_OPTION_SELECTOR =
 export const ASSISTANT_MESSAGE_SELECTOR = "[data-message-author-role=\"assistant\"]";
 export const GLOBAL_ERROR_SELECTOR =
   "[role=\"alert\"]:visible, [data-testid*=\"error\"]:visible";
+
+export const WRITING_BLOCK_SELECTOR = [
+  "[data-testid*=\"writing-block\"]",
+  "[data-testid*=\"writing_block\"]",
+  "[data-testid*=\"artifact\"]",
+  "[data-testid*=\"canvas\"]",
+].join(", ");
+
+export const FILE_ASSET_SELECTOR = [
+  "a[download]",
+  "a[data-testid*=\"download\"]",
+  "[data-testid*=\"file-attachment\"]",
+  "[data-testid*=\"file_attachment\"]",
+  "[data-testid*=\"attachment\"][role=\"button\"]",
+  "button[data-testid*=\"download\"]",
+].join(", ");
+
+export const IMAGE_ASSET_SELECTOR = "img[src]";
+
+export const CITATION_SELECTOR = [
+  "sup a[href]",
+  "a[data-testid*=\"citation\"][href]",
+  "[data-testid*=\"citation\"] a[href]",
+  "a[data-testid*=\"source\"][href]",
+].join(", ");
+
+export const PREVIEW_SELECTOR = [
+  "iframe",
+  "[data-testid*=\"preview\"]",
+  "[aria-label*=\"Preview\" i]",
+  "[aria-label*=\"미리보기\"]",
+].join(", ");
 
 export function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();

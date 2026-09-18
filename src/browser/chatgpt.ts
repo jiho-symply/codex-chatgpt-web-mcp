@@ -1,11 +1,11 @@
+import fs from "node:fs";
 import { Buffer } from "node:buffer";
 import type { Locator, Page } from "playwright";
 import {
   ASSISTANT_MESSAGE_SELECTOR,
-  CONTINUE_BUTTON_SELECTORS,
-  COPY_BUTTON_SELECTORS,
   EFFORT_PICKER_SELECTORS,
-  GLOBAL_ERROR_SELECTOR,
+  FILE_ASSET_SELECTOR,
+  IMAGE_ASSET_SELECTOR,
   MODEL_PICKER_SELECTORS,
   PICKER_OPTION_SELECTOR,
   PROMPT_SELECTORS,
@@ -17,6 +17,12 @@ import {
   truncateUtf8,
   uniqueOptions,
 } from "./selectors.js";
+import { detectChatGptUiState, type ChatGptUiSnapshot } from "./ui-state.js";
+import {
+  extractResponseManifest,
+  type ResponseManifest,
+} from "./response-extractor.js";
+import { AssetStore, AssetStoreError, type SavedAsset } from "../assets/store.js";
 import { CHATGPT_ORIGIN, type AppConfig } from "../config.js";
 import { BrowserRuntime } from "./runtime.js";
 
@@ -30,7 +36,9 @@ export type ChatGptErrorCode =
   | "UI_CHANGED"
   | "MODEL_UNAVAILABLE"
   | "EFFORT_UNAVAILABLE"
-  | "PROMPT_TOO_LARGE";
+  | "PROMPT_TOO_LARGE"
+  | "ASSET_UNSAFE_ORIGIN"
+  | "ASSET_RETRIEVAL_UNSUPPORTED";
 
 export class ChatGptWebError extends Error {
   constructor(
@@ -74,6 +82,8 @@ export interface BrowserTurnSnapshot {
   response: string | null;
   responseBytes: number;
   truncated: boolean;
+  manifest: ResponseManifest | null;
+  ui: ChatGptUiSnapshot;
 }
 
 function preserveMessageText(value: string): string {
@@ -102,49 +112,24 @@ async function waitForFirstVisible(
   return null;
 }
 
-async function isLoginWall(page: Page): Promise<boolean> {
-  const url = page.url().toLowerCase();
-  if (url.includes("/auth/login") || url.includes("/auth/signup")) return true;
-  const login = page.getByRole("button", { name: /log in|login|로그인/i }).first();
-  return login.isVisible().catch(() => false);
-}
-
-async function challengePresent(page: Page): Promise<boolean> {
-  const url = page.url().toLowerCase();
-  if (url.includes("/cdn-cgi/") || url.includes("challenge")) return true;
-  const title = (await page.title().catch(() => "")).toLowerCase();
-  if (title.includes("just a moment")) return true;
-  const visible = await page
-    .getByText(/verify you are human|checking your browser|사람인지 확인/i)
-    .first()
-    .isVisible()
-    .catch(() => false);
-  return visible;
-}
-
-async function throwPageProblem(page: Page): Promise<void> {
-  if (await isLoginWall(page)) {
+function throwForUiState(ui: ChatGptUiSnapshot): void {
+  if (ui.state === "auth_required") {
     throw new ChatGptWebError(
       "AUTH_REQUIRED",
-      "ChatGPT authentication is required. Run cgw login in an interactive session."
+      ui.message ?? "ChatGPT authentication is required."
     );
   }
-  if (await challengePresent(page)) {
+  if (ui.state === "challenge_required") {
     throw new ChatGptWebError(
       "CHALLENGE_REQUIRED",
-      "ChatGPT is showing a browser verification challenge. Complete it manually; this proxy does not bypass challenges."
+      ui.message ?? "ChatGPT browser verification requires manual action."
     );
   }
-
-  const alerts = uniqueOptions(
-    await page.locator(GLOBAL_ERROR_SELECTOR).allInnerTexts().catch(() => [])
-  );
-  const joined = alerts.join(" | ");
-  if (/rate limit|too many requests|usage limit|try again later|잠시 후 다시/i.test(joined)) {
-    throw new ChatGptWebError("RATE_LIMITED", joined || "ChatGPT rate limit reached.");
+  if (ui.state === "rate_limited") {
+    throw new ChatGptWebError("RATE_LIMITED", ui.message ?? "ChatGPT rate limit reached.");
   }
-  if (/something went wrong|network error|오류가 발생|문제가 발생/i.test(joined)) {
-    throw new ChatGptWebError("REMOTE_ERROR", joined);
+  if (ui.state === "remote_error") {
+    throw new ChatGptWebError("REMOTE_ERROR", ui.message ?? "ChatGPT reported a remote error.");
   }
 }
 
@@ -216,17 +201,57 @@ async function selectExact(
 }
 
 async function messageHasCopyButton(message: Locator): Promise<boolean> {
-  for (const selector of COPY_BUTTON_SELECTORS) {
-    if (await message.locator(selector).first().isVisible().catch(() => false)) return true;
+  return message
+    .locator('button[data-testid*="copy"], button[aria-label*="Copy" i], button[aria-label*="복사"]')
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
+function safeAssetUrl(value: string, base: string): URL {
+  const url = new URL(value, base);
+  if (url.protocol !== "https:") {
+    throw new ChatGptWebError("ASSET_UNSAFE_ORIGIN", "Only HTTPS ChatGPT asset URLs are allowed.");
   }
-  return false;
+  const host = url.hostname.toLowerCase();
+  const allowed =
+    host === "chatgpt.com" ||
+    host.endsWith(".chatgpt.com") ||
+    host === "openai.com" ||
+    host.endsWith(".openai.com") ||
+    host === "oaiusercontent.com" ||
+    host.endsWith(".oaiusercontent.com") ||
+    host === "oaistatic.com" ||
+    host.endsWith(".oaistatic.com");
+  if (!allowed) {
+    throw new ChatGptWebError(
+      "ASSET_UNSAFE_ORIGIN",
+      "Refusing to fetch an asset from an untrusted origin: " + host
+    );
+  }
+  return url;
+}
+
+function decodeDataUrl(value: string): { bytes: Buffer; mime: string | null } {
+  const match = value.match(/^data:([^;,]*)(;base64)?,(.*)$/s);
+  if (!match) {
+    throw new ChatGptWebError("ASSET_RETRIEVAL_UNSUPPORTED", "Invalid data URL asset.");
+  }
+  const mime = match[1]?.trim() || null;
+  const payload = match[3] ?? "";
+  const bytes = match[2] ? Buffer.from(payload, "base64") : Buffer.from(decodeURIComponent(payload));
+  return { bytes, mime };
 }
 
 export class ChatGptWebClient {
+  private readonly assetStore: AssetStore;
+
   constructor(
     private readonly runtime: BrowserRuntime,
     private readonly config: AppConfig
-  ) {}
+  ) {
+    this.assetStore = new AssetStore(config.stateDir);
+  }
 
   private async navigate(page: Page, conversationId?: string): Promise<void> {
     if (conversationId !== undefined) {
@@ -244,7 +269,8 @@ export class ChatGptWebClient {
         );
       }
       await page.waitForTimeout(300);
-      await throwPageProblem(page);
+      const ui = await detectChatGptUiState(page);
+      throwForUiState(ui);
       const actual = extractConversationId(page.url());
       if (actual !== conversationId) {
         throw new ChatGptWebError(
@@ -261,7 +287,7 @@ export class ChatGptWebClient {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
-    await throwPageProblem(page);
+    throwForUiState(await detectChatGptUiState(page));
   }
 
   private async ensureConversation(page: Page, conversationId: string | null): Promise<void> {
@@ -269,7 +295,7 @@ export class ChatGptWebClient {
       const deadline = Date.now() + 5_000;
       let current = extractConversationId(page.url());
       while (!current && Date.now() < deadline) {
-        await throwPageProblem(page);
+        throwForUiState(await detectChatGptUiState(page));
         await page.waitForTimeout(250);
         current = extractConversationId(page.url());
       }
@@ -288,7 +314,8 @@ export class ChatGptWebClient {
   private async requireComposer(page: Page): Promise<Locator> {
     const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 15_000);
     if (composer) return composer;
-    await throwPageProblem(page);
+    const ui = await detectChatGptUiState(page);
+    throwForUiState(ui);
     throw new ChatGptWebError(
       "UI_CHANGED",
       "Could not find the ChatGPT prompt composer. The web UI may have changed."
@@ -300,16 +327,19 @@ export class ChatGptWebClient {
     uiReady: boolean;
     conversationId: string | null;
     headless: boolean;
+    ui: ChatGptUiSnapshot;
   }> {
     const page = await this.runtime.page();
     await this.navigate(page);
-    const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 10_000);
-    const authenticated = Boolean(composer);
+    const ui = await detectChatGptUiState(page);
+    const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 2_000);
+    const authenticated = !["auth_required", "challenge_required"].includes(ui.state);
     return {
       authenticated,
-      uiReady: authenticated,
+      uiReady: Boolean(composer) && ["ready", "generating", "paused"].includes(ui.state),
       conversationId: extractConversationId(page.url()),
       headless: this.runtime.headless,
+      ui,
     };
   }
 
@@ -364,12 +394,30 @@ export class ChatGptWebClient {
     const deadline = Date.now() + 10_000;
     let conversationId = input.conversationId ?? extractConversationId(page.url());
     while (!conversationId && Date.now() < deadline) {
-      await throwPageProblem(page);
+      throwForUiState(await detectChatGptUiState(page));
       await page.waitForTimeout(250);
       conversationId = extractConversationId(page.url());
     }
 
     return { conversationId, baselineAssistantCount };
+  }
+
+  private async manifestFor(
+    page: Page,
+    baselineAssistantCount: number
+  ): Promise<ResponseManifest | null> {
+    const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
+    const count = await messages.count();
+    if (count <= baselineAssistantCount) return null;
+    const conversationId = extractConversationId(page.url());
+    if (!conversationId) return null;
+    const assistantIndex = count - 1;
+    return extractResponseManifest({
+      message: messages.nth(assistantIndex),
+      conversationId,
+      assistantIndex,
+      assetStore: this.assetStore,
+    });
   }
 
   async inspectTurn(input: {
@@ -386,11 +434,10 @@ export class ChatGptWebClient {
     let first = true;
 
     do {
-      await throwPageProblem(page);
+      const ui = await detectChatGptUiState(page);
+      throwForUiState(ui);
       const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
       const count = await messages.count();
-      const stopVisible = Boolean(await firstVisible(page, STOP_BUTTON_SELECTORS));
-      const paused = Boolean(await firstVisible(page, CONTINUE_BUTTON_SELECTORS));
 
       let response: string | null = null;
       let copyVisible = false;
@@ -406,8 +453,10 @@ export class ChatGptWebClient {
       }
 
       const stableLongEnough = Boolean(response) && Date.now() - stableSince >= this.config.stableMs;
+      const paused = ui.state === "paused";
+      const generating = ui.state === "generating";
       const complete =
-        Boolean(response) && !stopVisible && !paused && (copyVisible || stableLongEnough);
+        Boolean(response) && !generating && !paused && (copyVisible || stableLongEnough);
 
       if (complete || paused || input.timeoutMs === 0) {
         const bounded = truncateUtf8(response ?? "", this.config.maxResponseBytes);
@@ -419,6 +468,8 @@ export class ChatGptWebClient {
           response: response === null ? null : bounded.text,
           responseBytes: bounded.bytes,
           truncated: bounded.truncated,
+          manifest: response === null ? null : await this.manifestFor(page, input.baselineAssistantCount),
+          ui,
         };
       }
 
@@ -427,6 +478,8 @@ export class ChatGptWebClient {
       await page.waitForTimeout(500);
     } while (first || Date.now() <= deadline);
 
+    const ui = await detectChatGptUiState(page);
+    throwForUiState(ui);
     const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
     const count = await messages.count();
     const response =
@@ -437,11 +490,13 @@ export class ChatGptWebClient {
     return {
       conversationId: extractConversationId(page.url()) ?? input.conversationId,
       complete: false,
-      paused: Boolean(await firstVisible(page, CONTINUE_BUTTON_SELECTORS)),
-      generating: true,
+      paused: ui.state === "paused",
+      generating: ui.state === "generating" || Boolean(response),
       response: response === null ? null : bounded.text,
       responseBytes: bounded.bytes,
       truncated: bounded.truncated,
+      manifest: response === null ? null : await this.manifestFor(page, input.baselineAssistantCount),
+      ui,
     };
   }
 
@@ -463,6 +518,139 @@ export class ChatGptWebClient {
       conversationId: extractConversationId(page.url()) ?? input.conversationId,
       baselineAssistantCount: input.baselineAssistantCount,
       timeoutMs: 0,
+    });
+  }
+
+  private async meaningfulImage(message: Locator, ordinal: number): Promise<Locator> {
+    const images = message.locator(IMAGE_ASSET_SELECTOR);
+    const count = await images.count();
+    let seen = 0;
+    for (let index = 0; index < count; index++) {
+      const image = images.nth(index);
+      const meaningful = await image
+        .evaluate((node) => {
+          const img = node as HTMLImageElement;
+          const rect = img.getBoundingClientRect();
+          const width = img.naturalWidth || rect.width || Number(img.getAttribute("width")) || 0;
+          const height = img.naturalHeight || rect.height || Number(img.getAttribute("height")) || 0;
+          return width >= 48 || height >= 48 || Boolean(img.getAttribute("alt")?.trim());
+        })
+        .catch(() => false);
+      if (!meaningful) continue;
+      if (seen === ordinal) return image;
+      seen++;
+    }
+    throw new AssetStoreError("ASSET_NOT_FOUND", "Image asset is no longer present in the response.");
+  }
+
+  private async readAssetHref(record: ReturnType<AssetStore["get"]>, message: Locator): Promise<{
+    href: string;
+    filename: string | null;
+    mime: string | null;
+  }> {
+    if (record.kind === "image") {
+      const image = await this.meaningfulImage(message, record.ordinal);
+      const src = await image.getAttribute("src");
+      if (!src) {
+        throw new ChatGptWebError("ASSET_RETRIEVAL_UNSUPPORTED", "Image has no retrievable src.");
+      }
+      return {
+        href: src,
+        filename: record.filename,
+        mime: await image.getAttribute("type"),
+      };
+    }
+
+    const candidates = message.locator(FILE_ASSET_SELECTOR);
+    if ((await candidates.count()) <= record.ordinal) {
+      throw new AssetStoreError("ASSET_NOT_FOUND", "File asset is no longer present in the response.");
+    }
+    const candidate = candidates.nth(record.ordinal);
+    let href = await candidate.getAttribute("href");
+    let filename = await candidate.getAttribute("download");
+    if (!href) {
+      const anchor = candidate.locator("a[href]").first();
+      if (await anchor.count()) {
+        href = await anchor.getAttribute("href");
+        filename = filename ?? (await anchor.getAttribute("download"));
+      }
+    }
+    if (!href) {
+      throw new ChatGptWebError(
+        "ASSET_RETRIEVAL_UNSUPPORTED",
+        "This file card has no safe direct asset URL. The proxy will not click an opaque download control."
+      );
+    }
+    return {
+      href,
+      filename: filename ?? record.filename,
+      mime:
+        (await candidate.getAttribute("data-mime")) ??
+        (await candidate.getAttribute("data-mime-type")) ??
+        record.mime,
+    };
+  }
+
+  async getAsset(assetId: string): Promise<SavedAsset> {
+    const record = this.assetStore.get(assetId);
+    const page = await this.runtime.page();
+    await this.navigate(page, record.conversationId);
+
+    const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
+    if ((await messages.count()) <= record.assistantIndex) {
+      throw new AssetStoreError("ASSET_NOT_FOUND", "Assistant response containing the asset is unavailable.");
+    }
+    const message = messages.nth(record.assistantIndex);
+    const source = await this.readAssetHref(record, message);
+
+    let bytes: Buffer;
+    let mime = source.mime;
+    if (source.href.startsWith("data:")) {
+      const decoded = decodeDataUrl(source.href);
+      bytes = decoded.bytes;
+      mime = mime ?? decoded.mime;
+    } else if (source.href.startsWith("blob:")) {
+      const encoded = await page.evaluate(async (url) => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("blob fetch failed");
+        const buffer = new Uint8Array(await response.arrayBuffer());
+        let binary = "";
+        const step = 0x8000;
+        for (let i = 0; i < buffer.length; i += step) {
+          binary += String.fromCharCode(...buffer.subarray(i, i + step));
+        }
+        return { base64: btoa(binary), type: response.headers.get("content-type") };
+      }, source.href);
+      bytes = Buffer.from(encoded.base64, "base64");
+      mime = mime ?? encoded.type;
+    } else {
+      const url = safeAssetUrl(source.href, page.url());
+      const response = await page.context().request.get(url.toString(), {
+        timeout: 30_000,
+        maxRedirects: 5,
+      });
+      if (!response.ok()) {
+        throw new ChatGptWebError(
+          "ASSET_RETRIEVAL_UNSUPPORTED",
+          "ChatGPT asset request failed with HTTP " + response.status() + "."
+        );
+      }
+      safeAssetUrl(response.url(), page.url());
+      const contentLength = Number(response.headers()["content-length"] ?? "0");
+      if (contentLength > this.config.maxAssetBytes) {
+        throw new AssetStoreError(
+          "ASSET_TOO_LARGE",
+          "Asset declares " + contentLength + " bytes; limit is " + this.config.maxAssetBytes + "."
+        );
+      }
+      bytes = Buffer.from(await response.body());
+      mime = mime ?? response.headers()["content-type"] ?? null;
+    }
+
+    return this.assetStore.save(record, bytes, {
+      filename: source.filename,
+      mime,
+      maxBytes: this.config.maxAssetBytes,
     });
   }
 }
