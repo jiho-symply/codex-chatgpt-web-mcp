@@ -5,6 +5,7 @@ import {
   extractProjectId,
   isValidProjectId,
   projectHomeUrl,
+  PROMPT_SELECTORS,
 } from "../browser/selectors.js";
 import {
   ProjectNamingMode,
@@ -59,6 +60,20 @@ async function firstVisible(scope: Page | Locator, selectors: readonly string[])
     if (await locator.isVisible().catch(() => false)) return locator;
   }
   return null;
+}
+
+async function visibleComposer(page: Page): Promise<Locator | null> {
+  return firstVisible(page, PROMPT_SELECTORS);
+}
+
+function namedComposerPointsElsewhere(label: string, expectedProjectName: string): boolean {
+  const normalized = label.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  const identifiesProject =
+    /new chat in|chat in|새 채팅|프로젝트/i.test(normalized);
+  return identifiesProject && !normalized.toLocaleLowerCase().includes(
+    expectedProjectName.toLocaleLowerCase()
+  );
 }
 
 async function projectDialog(page: Page): Promise<Locator> {
@@ -218,6 +233,52 @@ export class WorkspaceProjectManager {
     return null;
   }
 
+  async assertPageBoundToWorkspace(
+    page: Page,
+    workspaceId: string
+  ): Promise<WorkspaceProjectBinding> {
+    const binding = this.store.get(workspaceId);
+    if (
+      binding.status !== "ready" ||
+      binding.memoryMode !== "project-only" ||
+      !binding.memoryVerifiedAt
+    ) {
+      throw new WorkspaceProjectError(
+        "PROJECT_MEMORY_UNVERIFIED",
+        "Workspace Project-only memory is not locally verified."
+      );
+    }
+
+    const observedProjectId = extractProjectId(page.url());
+    if (observedProjectId !== binding.projectId) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "The active ChatGPT page is not inside the Project bound to this workspace."
+      );
+    }
+
+    const composer = await visibleComposer(page);
+    if (!composer) {
+      throw new WorkspaceProjectError(
+        "PROJECT_NAVIGATION_FAILED",
+        "The bound ChatGPT Project page does not expose a usable composer."
+      );
+    }
+
+    const label =
+      (await composer.getAttribute("aria-label").catch(() => null)) ??
+      (await composer.getAttribute("data-placeholder").catch(() => null)) ??
+      (await composer.getAttribute("placeholder").catch(() => null)) ??
+      "";
+    if (namedComposerPointsElsewhere(label, binding.projectName)) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "ChatGPT's composer appears bound to a different Project than the workspace mapping."
+      );
+    }
+    return binding;
+  }
+
   async openBoundProject(workspaceId: string): Promise<{
     page: Page;
     binding: WorkspaceProjectBinding;
@@ -241,6 +302,7 @@ export class WorkspaceProjectManager {
       onProjectHome = false;
     }
     if (onProjectHome) {
+      await this.assertPageBoundToWorkspace(page, workspaceId);
       return { page, binding };
     }
 
@@ -256,7 +318,13 @@ export class WorkspaceProjectManager {
     const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
       const observed = extractProjectId(page.url());
-      if (observed === binding.projectId) return { page, binding };
+      if (observed === binding.projectId) {
+        const composer = await visibleComposer(page);
+        if (composer) {
+          await this.assertPageBoundToWorkspace(page, workspaceId);
+          return { page, binding };
+        }
+      }
       if (observed && observed !== binding.projectId) {
         throw new WorkspaceProjectError(
           "PROJECT_DESTINATION_MISMATCH",
@@ -359,6 +427,18 @@ export class WorkspaceProjectManager {
       throw new WorkspaceProjectError(
         "PROJECT_CREATE_FAILED",
         "Project creation did not land on a verifiable ChatGPT Project URL."
+      );
+    }
+
+    const composerDeadline = Date.now() + 10_000;
+    while (Date.now() < composerDeadline) {
+      if (await visibleComposer(page)) break;
+      await page.waitForTimeout(250);
+    }
+    if (!(await visibleComposer(page))) {
+      throw new WorkspaceProjectError(
+        "PROJECT_CREATE_FAILED",
+        "Project URL was created but its composer did not become usable; no local binding was saved."
       );
     }
 
