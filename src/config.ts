@@ -7,6 +7,7 @@ export const DEFAULT_TIMEOUT_MS = 180_000;
 export const DEFAULT_STABLE_MS = 5_000;
 export const MAX_PROMPT_BYTES = 512 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
+export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 
 export interface AppConfig {
   stateDir: string;
@@ -17,6 +18,7 @@ export interface AppConfig {
   stableMs: number;
   maxPromptBytes: number;
   maxResponseBytes: number;
+  maxAssetBytes: number;
 }
 
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
@@ -86,5 +88,6 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
     stableMs: intEnv(process.env.CGW_STABLE_MS, DEFAULT_STABLE_MS, 1_000, 30_000),
     maxPromptBytes: MAX_PROMPT_BYTES,
     maxResponseBytes: MAX_RESPONSE_BYTES,
+    maxAssetBytes: MAX_ASSET_BYTES,
   };
 }
