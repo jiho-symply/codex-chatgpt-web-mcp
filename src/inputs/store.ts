@@ -7,6 +7,7 @@ import {
   decodeStrictBase64,
   scanSensitiveText,
   validateBinaryInput,
+  validateBinaryMetadata,
   validateInputFilename,
   validateTextMime,
   type InputKind,
@@ -57,7 +58,9 @@ export class InputStoreError extends Error {
       | "INPUT_TOO_LARGE"
       | "INPUT_TOTAL_TOO_LARGE"
       | "INPUT_TOO_MANY"
-      | "INPUT_INTEGRITY_ERROR",
+      | "INPUT_INTEGRITY_ERROR"
+      | "INPUT_SLOT_NOT_FOUND"
+      | "INPUT_SLOT_EXPIRED",
     message: string
   ) {
     super(message);
@@ -66,6 +69,45 @@ export class InputStoreError extends Error {
 }
 
 const MAX_INPUT_RECORDS = 500;
+const INPUT_SLOT_TTL_MS = 15 * 60 * 1000;
+
+interface BlobSlotRecord {
+  slotId: string;
+  filename: string;
+  mime: string;
+  expectedSizeBytes: number;
+  expectedSha256: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+function slotsDir(stateDir: string): string {
+  return ensurePrivateDir(path.join(inputDir(stateDir), "inbox"));
+}
+
+function slotMetaPath(stateDir: string, slotId: string): string {
+  return path.join(slotsDir(stateDir), slotId + ".json");
+}
+
+function slotDataPath(stateDir: string, slotId: string): string {
+  return path.join(slotsDir(stateDir), slotId + ".upload");
+}
+
+function readSlot(stateDir: string, slotId: string): BlobSlotRecord {
+  if (!/^slot_[a-f0-9]{24}$/.test(slotId)) {
+    throw new InputStoreError("INPUT_SLOT_NOT_FOUND", "Invalid input slot id.");
+  }
+  const meta = slotMetaPath(stateDir, slotId);
+  if (!fs.existsSync(meta) || fs.lstatSync(meta).isSymbolicLink()) {
+    throw new InputStoreError("INPUT_SLOT_NOT_FOUND", "Unknown input slot: " + slotId);
+  }
+  try {
+    return JSON.parse(fs.readFileSync(meta, "utf8")) as BlobSlotRecord;
+  } catch {
+    throw new InputStoreError("INPUT_STATE_CORRUPT", "Input slot metadata is invalid.");
+  }
+}
+
 
 function inputDir(stateDir: string): string {
   return ensurePrivateDir(path.join(stateDir, "input-staging"));
@@ -201,6 +243,117 @@ export class InputStore {
     return this.create({ kind, filename, mime, bytes });
   }
 
+  createBlobSlot(input: {
+    filename: string;
+    mime: string;
+    sizeBytes: number;
+    sha256: string;
+  }): {
+    slotId: string;
+    filename: string;
+    mime: string;
+    expectedSizeBytes: number;
+    expectedSha256: string;
+    writePath: string;
+    expiresAt: string;
+  } {
+    const metadata = validateBinaryMetadata({ filename: input.filename, mime: input.mime });
+    if (!Number.isInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > this.config.maxInputAssetBytes) {
+      throw new InputStoreError(
+        "INPUT_TOO_LARGE",
+        "Binary slot size must be 1-" + this.config.maxInputAssetBytes + " bytes."
+      );
+    }
+    const sha256 = input.sha256.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(sha256)) {
+      throw new InputStoreError("INPUT_INTEGRITY_ERROR", "Expected SHA-256 must be 64 lowercase/uppercase hex characters.");
+    }
+
+    this.cleanupSlots();
+    const slotId = "slot_" + randomBytes(12).toString("hex");
+    const now = Date.now();
+    const record: BlobSlotRecord = {
+      slotId,
+      filename: metadata.filename,
+      mime: metadata.mime,
+      expectedSizeBytes: input.sizeBytes,
+      expectedSha256: sha256,
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + INPUT_SLOT_TTL_MS).toISOString(),
+    };
+    const dataPath = slotDataPath(this.stateDir, slotId);
+    const metaPath = slotMetaPath(this.stateDir, slotId);
+    fs.writeFileSync(dataPath, Buffer.alloc(0), { flag: "wx", mode: 0o600 });
+    fs.writeFileSync(metaPath, JSON.stringify(record, null, 2), { flag: "wx", mode: 0o600 });
+    try { fs.chmodSync(dataPath, 0o600); fs.chmodSync(metaPath, 0o600); } catch {}
+    return {
+      slotId,
+      filename: record.filename,
+      mime: record.mime,
+      expectedSizeBytes: record.expectedSizeBytes,
+      expectedSha256: record.expectedSha256,
+      writePath: dataPath,
+      expiresAt: record.expiresAt,
+    };
+  }
+
+  commitBlobSlot(slotId: string): InputAssetView {
+    const record = readSlot(this.stateDir, slotId);
+    if (Date.parse(record.expiresAt) <= Date.now()) {
+      this.discardSlot(slotId);
+      throw new InputStoreError("INPUT_SLOT_EXPIRED", "Input slot has expired: " + slotId);
+    }
+    const dataPath = slotDataPath(this.stateDir, slotId);
+    if (!fs.existsSync(dataPath) || fs.lstatSync(dataPath).isSymbolicLink() || !fs.statSync(dataPath).isFile()) {
+      throw new InputStoreError("INPUT_INTEGRITY_ERROR", "Input slot data file is missing or unsafe.");
+    }
+    const stat = fs.statSync(dataPath);
+    if (stat.size !== record.expectedSizeBytes) {
+      throw new InputStoreError(
+        "INPUT_INTEGRITY_ERROR",
+        "Input slot size mismatch: expected " + record.expectedSizeBytes + ", got " + stat.size + "."
+      );
+    }
+    const bytes = fs.readFileSync(dataPath);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    if (sha256 !== record.expectedSha256) {
+      throw new InputStoreError("INPUT_INTEGRITY_ERROR", "Input slot SHA-256 mismatch.");
+    }
+    const validated = validateBinaryInput({
+      filename: record.filename,
+      mime: record.mime,
+      bytes,
+    });
+    const staged = this.create({ ...validated, bytes });
+    this.discardSlot(slotId);
+    return staged;
+  }
+
+  private discardSlot(slotId: string): void {
+    fs.rmSync(slotDataPath(this.stateDir, slotId), { force: true });
+    fs.rmSync(slotMetaPath(this.stateDir, slotId), { force: true });
+  }
+
+  private cleanupSlots(): number {
+    const dir = slotsDir(this.stateDir);
+    let removed = 0;
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^slot_[a-f0-9]{24}\.json$/.test(name)) continue;
+      const slotId = name.slice(0, -5);
+      try {
+        const record = readSlot(this.stateDir, slotId);
+        if (Date.parse(record.expiresAt) <= Date.now()) {
+          this.discardSlot(slotId);
+          removed++;
+        }
+      } catch {
+        this.discardSlot(slotId);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   stageBlob(input: { filename: string; mime: string; dataBase64: string }): InputAssetView {
     const bytes = decodeStrictBase64(input.dataBase64, this.config.maxInputAssetBytes);
     const validated = validateBinaryInput({
@@ -227,6 +380,7 @@ export class InputStore {
   }
 
   cleanup(): number {
+    let removedSlots = this.cleanupSlots();
     const state = readState(this.stateDir);
     const now = Date.now();
     const keep: InputAssetRecord[] = [];
@@ -243,7 +397,7 @@ export class InputStore {
       }
     }
     if (removed > 0) writeState(this.stateDir, { version: 1, items: keep });
-    return removed;
+    return removed + removedSlots;
   }
 
   resolve(inputAssetIds: string[]): ResolvedInputAsset[] {
