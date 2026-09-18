@@ -10,6 +10,7 @@ const oldHeadless = process.env.CGW_HEADLESS;
 const oldTimeout = process.env.CGW_TIMEOUT_MS;
 const oldStable = process.env.CGW_STABLE_MS;
 const oldRequireWorkspace = process.env.CGW_REQUIRE_WORKSPACE_PROJECT;
+const oldBrowserExecutable = process.env.CGW_BROWSER_EXECUTABLE;
 
 afterEach(() => {
   if (oldState === undefined) delete process.env.CGW_STATE_DIR;
@@ -22,6 +23,8 @@ afterEach(() => {
   else process.env.CGW_STABLE_MS = oldStable;
   if (oldRequireWorkspace === undefined) delete process.env.CGW_REQUIRE_WORKSPACE_PROJECT;
   else process.env.CGW_REQUIRE_WORKSPACE_PROJECT = oldRequireWorkspace;
+  if (oldBrowserExecutable === undefined) delete process.env.CGW_BROWSER_EXECUTABLE;
+  else process.env.CGW_BROWSER_EXECUTABLE = oldBrowserExecutable;
 
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
   dirs.length = 0;
@@ -53,6 +56,14 @@ describe("config", () => {
     process.env.CGW_STATE_DIR = dir;
     process.env.CGW_REQUIRE_WORKSPACE_PROJECT = "false";
     expect(loadConfig().requireWorkspaceProject).toBe(false);
+  });
+
+  it("accepts an explicit browser executable override", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cgw-state-"));
+    dirs.push(dir);
+    process.env.CGW_STATE_DIR = dir;
+    process.env.CGW_BROWSER_EXECUTABLE = "/custom/browser";
+    expect(loadConfig().browserExecutable).toBe("/custom/browser");
   });
 
   it("allows the caller to force headed login independently of env", () => {

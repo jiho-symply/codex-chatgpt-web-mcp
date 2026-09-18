@@ -20,6 +20,7 @@ export interface AppConfig {
   profileDir: string;
   headless: boolean;
   browserChannel: string | undefined;
+  browserExecutable: string | undefined;
   timeoutMs: number;
   stableMs: number;
   maxPromptBytes: number;
@@ -91,12 +92,14 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
   const stateDir = ensurePrivateDir(defaultStateDir());
   const profileDir = ensurePrivateDir(path.join(stateDir, "browser-profile"));
   const channel = process.env.CGW_BROWSER_CHANNEL?.trim();
+  const browserExecutable = process.env.CGW_BROWSER_EXECUTABLE?.trim();
 
   return {
     stateDir,
     profileDir,
     headless: overrides.headless ?? boolEnv(process.env.CGW_HEADLESS, true),
     browserChannel: channel || undefined,
+    browserExecutable: browserExecutable || undefined,
     timeoutMs: intEnv(process.env.CGW_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 10_000, 600_000),
     stableMs: intEnv(process.env.CGW_STABLE_MS, DEFAULT_STABLE_MS, 1_000, 30_000),
     maxPromptBytes: MAX_PROMPT_BYTES,

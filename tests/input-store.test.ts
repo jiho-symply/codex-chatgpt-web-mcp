@@ -25,6 +25,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     profileDir: "",
     headless: true,
     browserChannel: undefined,
+    browserExecutable: undefined,
     timeoutMs: 180_000,
     stableMs: 5_000,
     maxPromptBytes: 512 * 1024,
