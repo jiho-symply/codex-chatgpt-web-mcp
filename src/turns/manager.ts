@@ -89,7 +89,6 @@ export class TurnManager {
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
-      ...(input.inputAssetIds ? { inputAssetIds: input.inputAssetIds } : {}),
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     });
 
