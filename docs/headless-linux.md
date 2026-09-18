@@ -37,7 +37,7 @@ Complete login in the opened browser.
 Create a temporary graphical session on the server, run:
 
 ```bash
-node dist/cli.js login
+npx -y github:jiho-symply/codex-chatgpt-web-mcp login
 ```
 
 Complete authentication, then shut down the temporary desktop service.
@@ -71,7 +71,7 @@ npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
 npx -y github:jiho-symply/codex-chatgpt-web-mcp models
 ```
 
-Then configure Codex.
+Then register Codex as described in [installation.md](installation.md).
 
 ## State directory
 
