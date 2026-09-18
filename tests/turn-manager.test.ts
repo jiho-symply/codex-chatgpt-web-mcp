@@ -28,13 +28,19 @@ class FakeBackend implements ChatTurnBackend {
 
   async dispatch(_input: BrowserDispatchRequest) {
     this.dispatches++;
-    return { conversationId: "12345678-abcd", baselineAssistantCount: 2 };
+    return {
+      conversationId: "12345678-abcd",
+      projectId: _input.workspaceId ? "g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" : null,
+      workspaceId: _input.workspaceId ?? null,
+      baselineAssistantCount: 2,
+    };
   }
 
   async inspectTurn(): Promise<BrowserTurnSnapshot> {
     return (
       this.snapshots.shift() ?? {
         conversationId: "12345678-abcd",
+        projectId: null,
         complete: false,
         paused: false,
         generating: true,
@@ -54,6 +60,7 @@ class FakeBackend implements ChatTurnBackend {
   async stopTurn(): Promise<BrowserTurnSnapshot> {
     return {
       conversationId: "12345678-abcd",
+      projectId: null,
       complete: false,
       paused: false,
       generating: false,
@@ -93,6 +100,7 @@ describe("TurnManager", () => {
     const backend = new FakeBackend();
     backend.snapshots.push({
       conversationId: "12345678-abcd",
+      projectId: null,
       complete: true,
       paused: false,
       generating: false,
@@ -147,6 +155,24 @@ describe("TurnManager", () => {
     expect(result.status).toBe("reserved");
     expect(result.deduplicated).toBe(true);
     expect(backend.dispatches).toBe(0);
+  });
+
+  it("persists workspace and project identity returned by dispatch", async () => {
+    const backend = new FakeBackend();
+    const dir = tmp();
+    const manager = new TurnManager(backend, new TurnStore(dir));
+    const sent = await manager.send({
+      requestId: "req-10005",
+      prompt: "workspace task",
+      workspaceId: "ws_0123456789abcdef",
+    });
+
+    expect(sent.workspaceId).toBe("ws_0123456789abcdef");
+    expect(sent.projectId).toBe("g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    const persisted = new TurnStore(dir).get(sent.turnId);
+    expect(persisted.workspaceId).toBe("ws_0123456789abcdef");
+    expect(persisted.projectId).toBe("g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   });
 
   it("stops a known generating turn without sending another prompt", async () => {
