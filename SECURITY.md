@@ -81,9 +81,11 @@ symlinked state files.
 
 ## Explicit input staging
 
-The proxy has no local path/directory/repository upload API.
+The proxy has no caller-selected local path/directory/repository upload API.
 
-Codex must explicitly provide text or base64 bytes to the staging tools. Staged
+Codex must explicitly provide text/base64 bytes, or use a CGW-created one-time
+binary write slot. A slot exposes only a destination path inside CGW's private
+input inbox; CGW still never receives a caller-selected source path. Staged
 input files live under private application state, use owner-only permissions
 where supported, are size/integrity checked, and expire automatically.
 
