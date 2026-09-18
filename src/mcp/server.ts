@@ -148,7 +148,7 @@ const workspaceProjectSchema = z.object({
   projectUrl: z.string(),
   memoryMode: z.literal("project-only"),
   memoryVerifiedAt: z.string().nullable(),
-  memoryVerificationSource: z.literal("creation").nullable(),
+  memoryVerificationSource: z.enum(["creation", "settings"]).nullable(),
   status: z.enum(["ready", "memory_unverified"]),
   createdAt: z.string(),
   updatedAt: z.string(),
