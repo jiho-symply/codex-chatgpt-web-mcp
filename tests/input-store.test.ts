@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppConfig } from "../src/config.js";
 import { InputPolicyError } from "../src/inputs/policy.js";
@@ -127,6 +128,41 @@ describe("InputStore", () => {
     expect(store.cleanup()).toBe(1);
     expect(store.list()).toEqual([]);
     expect(() => store.resolve([staged.inputAssetId])).toThrowError(InputStoreError);
+  });
+
+
+  it("commits a large-binary write slot only after exact hash/size validation", () => {
+    const dir = tmp();
+    const store = new InputStore(dir, config());
+    const pdf = Buffer.from("%PDF-1.7\nbody\n");
+    const sha256 = createHash("sha256").update(pdf).digest("hex");
+    const slot = store.createBlobSlot({
+      filename: "spec.pdf",
+      mime: "application/pdf",
+      sizeBytes: pdf.length,
+      sha256,
+    });
+
+    expect(slot.writePath.startsWith(path.join(dir, "input-staging", "inbox"))).toBe(true);
+    fs.writeFileSync(slot.writePath, pdf);
+    const staged = store.commitBlobSlot(slot.slotId);
+    expect(staged.filename).toBe("spec.pdf");
+    expect(staged.kind).toBe("document");
+    expect(() => store.commitBlobSlot(slot.slotId)).toThrowError(InputStoreError);
+  });
+
+  it("rejects blob-slot size/hash mismatch", () => {
+    const dir = tmp();
+    const store = new InputStore(dir, config());
+    const pdf = Buffer.from("%PDF-1.7\nbody\n");
+    const slot = store.createBlobSlot({
+      filename: "spec.pdf",
+      mime: "application/pdf",
+      sizeBytes: pdf.length,
+      sha256: "0".repeat(64),
+    });
+    fs.writeFileSync(slot.writePath, pdf);
+    expect(() => store.commitBlobSlot(slot.slotId)).toThrowError(InputStoreError);
   });
 
   it("detects staged-file tampering before upload", () => {
