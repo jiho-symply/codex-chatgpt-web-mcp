@@ -44,6 +44,8 @@ The server is responsible only for:
 - fixed-origin navigation
 - conversation reuse
 - live model/effort picker discovery
+- explicit caller-provided input staging
+- validated ChatGPT attachment upload
 - idempotent prompt dispatch
 - persistent local turn metadata
 - bounded generation polling and timeout recovery
@@ -84,6 +86,25 @@ This prevents:
 - model selection from one request affecting another
 - prompts landing in the wrong conversation
 - response extraction races
+
+## Input boundary
+
+```text
+Codex workspace access
+      │
+      │ explicit text/base64 only
+      ▼
+private CGW input staging
+      │
+      │ opaque input_asset_id
+      ▼
+ChatGPT attachment UI
+```
+
+The MCP has no arbitrary filesystem-read or directory-upload capability.
+Staged input is integrity-checked again before each upload.
+
+See [input-attachments.md](input-attachments.md).
 
 ## Turn lifecycle
 
