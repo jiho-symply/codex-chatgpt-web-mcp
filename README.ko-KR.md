@@ -111,6 +111,29 @@ Codex가 검증/적용/테스트
 Codex는 필요한 코드만 prompt에 포함시키고, 반환된 코드/diff를 로컬에서 검증한
 뒤 적용할 수 있습니다.
 
+## 명시적 입력 첨부
+
+Codex가 선택한 자료를 ChatGPT Web에 첨부할 수 있지만, proxy에 임의 filesystem
+read 권한을 주지는 않습니다.
+
+추가 도구:
+
+- `chatgpt_stage_text`
+- `chatgpt_stage_blob`
+- `chatgpt_list_staged_inputs`
+- `chatgpt_discard_staged_input`
+
+staging 결과의 `input_asset_id`를 `chatgpt_send` 또는 `chatgpt_chat`의
+`input_asset_ids`에 넘기면 그때 실제 ChatGPT Web 첨부가 발생합니다.
+
+MCP는 local path를 입력으로 받지 않습니다. Source code, diff, log, Markdown,
+CSV/TSV, JSON/XML/YAML 등은 text staging으로 처리하고, binary는 PDF, DOCX,
+PPTX, XLSX/XLS, PNG/JPEG/GIF만 허용합니다.
+
+.env, private key, credential/secret 계열 파일과 archive/executable/unknown
+binary는 차단합니다. 자세한 내용은
+[docs/input-attachments.md](docs/input-attachments.md)를 참고하세요.
+
 ## 구조화된 응답 처리
 
 turn 결과에는 단순 `response` 문자열뿐 아니라 `manifest`가 포함될 수 있습니다.
