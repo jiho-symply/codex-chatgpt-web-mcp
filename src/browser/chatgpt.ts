@@ -426,6 +426,14 @@ export class ChatGptWebClient {
     workspaceName?: string;
     namingMode?: ProjectNamingMode;
   }): Promise<WorkspaceProjectBinding> {
+    const state = await this.status();
+    throwForUiState(state.ui);
+    if (!state.authenticated) {
+      throw new ChatGptWebError(
+        "AUTH_REQUIRED",
+        "ChatGPT authentication is required before binding a workspace project."
+      );
+    }
     return this.projectManager.bindWorkspace(input);
   }
 
@@ -641,6 +649,13 @@ export class ChatGptWebClient {
   }
 
   async dispatch(input: BrowserDispatchRequest): Promise<BrowserTurnDispatch> {
+    if (this.config.requireWorkspaceProject && !input.workspaceId) {
+      throw new WorkspaceProjectError(
+        "WORKSPACE_REQUIRED",
+        "A workspace_id is required by default so new ChatGPT chats stay inside a Project with Project-only memory. Set CGW_REQUIRE_WORKSPACE_PROJECT=false only for intentional legacy/general-chat use."
+      );
+    }
+
     const promptBytes = Buffer.byteLength(input.prompt, "utf8");
     if (promptBytes === 0) throw new Error("Prompt must not be empty.");
     if (promptBytes > this.config.maxPromptBytes) {
