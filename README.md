@@ -23,10 +23,10 @@ Do not modify files in my current project.
 
 1. Check that Node.js >= 20 and a supported Edge/Chrome/Chromium browser are available.
 2. Run:
-   npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
+   npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login
    If ChatGPT login, CAPTCHA, or 2FA needs human interaction, stop and ask me to complete it in the opened browser.
 3. Register the MCP server with:
-   codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
+   codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz mcp
 4. Verify registration with:
    codex mcp list
 5. Do not clone/build the repository unless the documented npx path actually fails.
@@ -41,6 +41,9 @@ restart Codex once after registration.
 
 ## Manual install
 
+Current stable CGW build: **v0.8.1** (`0790508bd966`). The install URL is pinned to this immutable Git commit so `npx` cannot reuse an older build behind the same floating URL.
+
+
 Requirements: **Node.js 20+** and a local browser.
 
 - Windows: Microsoft Edge or Google Chrome
@@ -48,10 +51,10 @@ Requirements: **Node.js 20+** and a local browser.
 
 ```bash
 # One-time ChatGPT login
-npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz login
 
 # Register CGW with Codex
-codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
+codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/0790508bd9662c93ee917c419228d64b9192e749.tar.gz mcp
 ```
 
 Verify with:
