@@ -53,6 +53,8 @@ const PROJECT_NAME_INPUT_SELECTORS = [
 const MORE_OPTIONS_LABEL = /more options|advanced|추가 옵션|고급/i;
 const PROJECT_ONLY_LABEL = /project[- ]only memory|project only|프로젝트 전용 메모리|프로젝트만/i;
 const CREATE_PROJECT_LABEL = /create project|create|프로젝트 만들기|프로젝트 생성|생성/i;
+const PROJECT_SETTINGS_LABEL = /project settings|프로젝트 설정/i;
+const PROJECT_MENU_LABEL = /project.*(?:options|menu|settings)|(?:options|menu|settings).*project|프로젝트.*(?:옵션|메뉴|설정)|(?:옵션|메뉴|설정).*프로젝트/i;
 
 async function firstVisible(scope: Page | Locator, selectors: readonly string[]): Promise<Locator | null> {
   for (const selector of selectors) {
@@ -170,6 +172,122 @@ async function selectProjectOnlyMemory(page: Page, scope: Locator): Promise<void
   }
 }
 
+async function openProjectSettings(
+  page: Page,
+  binding: WorkspaceProjectBinding
+): Promise<Locator> {
+  const direct = page.getByRole("button", { name: PROJECT_SETTINGS_LABEL }).first();
+  if (await direct.isVisible().catch(() => false)) {
+    await direct.click();
+    await page.waitForTimeout(200);
+    const dialog = page.getByRole("dialog").last();
+    if (await dialog.isVisible().catch(() => false)) return dialog;
+  }
+
+  const candidates: Locator[] = [];
+  const semantic = page.locator("button[aria-label]").filter({ hasText: "" });
+  const semanticCount = await semantic.count().catch(() => 0);
+  for (let i = 0; i < semanticCount; i++) {
+    const button = semantic.nth(i);
+    if (!(await button.isVisible().catch(() => false))) continue;
+    const aria = (await button.getAttribute("aria-label").catch(() => null)) ?? "";
+    if (PROJECT_MENU_LABEL.test(aria)) candidates.push(button);
+  }
+
+  const exactNames = page.getByText(binding.projectName, { exact: true });
+  const nameCount = await exactNames.count().catch(() => 0);
+  for (let i = 0; i < nameCount; i++) {
+    const name = exactNames.nth(i);
+    if (!(await name.isVisible().catch(() => false))) continue;
+    const container = name.locator(
+      "xpath=ancestor::*[descendant::button[@aria-haspopup='menu']][1]"
+    );
+    if ((await container.count().catch(() => 0)) > 0) {
+      const button = container.locator("button[aria-haspopup='menu']").first();
+      if (await button.isVisible().catch(() => false)) candidates.push(button);
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const button of candidates) {
+    const key =
+      (await button.getAttribute("aria-label").catch(() => null)) ??
+      (await button.innerText().catch(() => "")) ??
+      "";
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    await button.click().catch(() => undefined);
+    await page.waitForTimeout(150);
+
+    const menuItem = page.getByRole("menuitem", { name: PROJECT_SETTINGS_LABEL }).first();
+    const textItem = page.getByText(PROJECT_SETTINGS_LABEL, { exact: true }).last();
+    const target = (await menuItem.isVisible().catch(() => false))
+      ? menuItem
+      : (await textItem.isVisible().catch(() => false))
+        ? textItem
+        : null;
+    if (!target) {
+      await page.keyboard.press("Escape").catch(() => undefined);
+      continue;
+    }
+
+    await target.click();
+    await page.waitForTimeout(200);
+    const dialog = page.getByRole("dialog").last();
+    if (await dialog.isVisible().catch(() => false)) return dialog;
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+
+  throw new WorkspaceProjectError(
+    "PROJECT_MEMORY_UNVERIFIED",
+    "Could not open this Project's settings to re-verify Project-only memory."
+  );
+}
+
+async function verifyProjectOnlyInSettings(page: Page, dialog: Locator): Promise<void> {
+  if (await selectionLooksProjectOnly(dialog)) return;
+
+  const memoryButtons = dialog.getByRole("button", { name: /memory|메모리/i });
+  const memoryCombos = dialog.getByRole("combobox", { name: /memory|메모리/i });
+  let control: Locator | null = null;
+
+  const buttonCount = await memoryButtons.count().catch(() => 0);
+  for (let i = 0; i < buttonCount; i++) {
+    const item = memoryButtons.nth(i);
+    if (await item.isVisible().catch(() => false)) {
+      control = item;
+      break;
+    }
+  }
+  if (!control) {
+    const comboCount = await memoryCombos.count().catch(() => 0);
+    for (let i = 0; i < comboCount; i++) {
+      const item = memoryCombos.nth(i);
+      if (await item.isVisible().catch(() => false)) {
+        control = item;
+        break;
+      }
+    }
+  }
+
+  if (control) {
+    await control.click();
+    await page.waitForTimeout(150);
+    const scope = await projectDialog(page);
+    if (await selectionLooksProjectOnly(scope)) {
+      await page.keyboard.press("Escape").catch(() => undefined);
+      return;
+    }
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+
+  throw new WorkspaceProjectError(
+    "PROJECT_MEMORY_UNVERIFIED",
+    "Project settings do not currently verify Project-only memory. Refusing to send into this workspace Project."
+  );
+}
+
 function canonicalProjectIdFromHref(href: string | null): string | null {
   if (!href) return null;
   try {
@@ -279,6 +397,33 @@ export class WorkspaceProjectManager {
     return binding;
   }
 
+  async verifyProjectOnlyMemory(workspaceId: string): Promise<{
+    page: Page;
+    binding: WorkspaceProjectBinding;
+  }> {
+    const opened = await this.openBoundProject(workspaceId);
+    const dialog = await openProjectSettings(opened.page, opened.binding);
+    try {
+      await verifyProjectOnlyInSettings(opened.page, dialog);
+    } finally {
+      await opened.page.keyboard.press("Escape").catch(() => undefined);
+      await opened.page.waitForTimeout(100);
+    }
+
+    const now = new Date().toISOString();
+    const updated: WorkspaceProjectBinding = {
+      ...opened.binding,
+      memoryMode: "project-only",
+      memoryVerifiedAt: now,
+      memoryVerificationSource: "settings",
+      status: "ready",
+      updatedAt: now,
+    };
+    this.store.upsert(updated);
+    await this.assertPageBoundToWorkspace(opened.page, workspaceId);
+    return { page: opened.page, binding: updated };
+  }
+
   async openBoundProject(workspaceId: string): Promise<{
     page: Page;
     binding: WorkspaceProjectBinding;
@@ -354,8 +499,8 @@ export class WorkspaceProjectManager {
           "Existing local binding is not verified for Project-only memory."
         );
       }
-      await this.openBoundProject(workspaceId);
-      return existing;
+      const verified = await this.verifyProjectOnlyMemory(workspaceId);
+      return verified.binding;
     }
 
     const namingMode = input.namingMode ?? "workspace-name";
