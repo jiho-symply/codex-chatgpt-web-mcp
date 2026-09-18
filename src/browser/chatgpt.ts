@@ -391,6 +391,19 @@ export class ChatGptWebClient {
     return this.inputStore.stageBlob(input);
   }
 
+  createBlobInputSlot(input: {
+    filename: string;
+    mime: string;
+    sizeBytes: number;
+    sha256: string;
+  }) {
+    return this.inputStore.createBlobSlot(input);
+  }
+
+  commitBlobInputSlot(slotId: string): InputAssetView {
+    return this.inputStore.commitBlobSlot(slotId);
+  }
+
   listStagedInputs(): InputAssetView[] {
     return this.inputStore.list();
   }
