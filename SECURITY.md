@@ -60,8 +60,10 @@ The persistent browser profile contains authentication state and is sensitive.
 | UI selector ambiguity | Fail closed with `UI_CHANGED`; do not guess requested model/effort |
 | CAPTCHA / login challenge | Human action required; no bypass or stealth implementation |
 | Browser profile used by two processes | Atomic profile lock with stale-lock recovery |
-| Browser downloads | Playwright context uses `acceptDownloads: false` |
+| Browser downloads | Downloads are allowed only so an explicit `chatgpt_get_asset` call can retrieve an observed file card; outputs are size-capped, hashed, and staged under private proxy state rather than the workspace |
 | Website popup/new-tab surprises | Core chat workflow never follows assistant links or arbitrary navigation |
+| Model-generated external asset link | Asset retrieval accepts only page-local data/blob or approved ChatGPT/OpenAI/OAI HTTPS origins; arbitrary external origins are rejected |
+| Opaque generated-file control | It is clicked only after explicit `chatgpt_get_asset` on a previously observed manifest asset; temporary download is size-checked, staged, hashed, then deleted |
 
 ## Turn state
 
@@ -72,6 +74,16 @@ response bodies.
 
 Turn-state files use owner-only permissions where supported and reject
 symlinked state files.
+
+## Structured response extraction
+
+Response parsing is DOM-semantic, not screenshot/OCR based. Code blocks,
+writing blocks, tables, citations, files, images, and previews are extracted
+only when the rendered assistant-message DOM can identify them. Unknown
+structure is not guessed; flattened visible text remains available.
+
+Generated asset source URLs are not exposed through MCP. Only opaque asset ids
+are returned in manifests.
 
 ## Authentication
 
