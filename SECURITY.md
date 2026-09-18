@@ -92,6 +92,13 @@ memory, that option is selected, and its selected state can be verified. It
 does not adopt an existing Project by visible name and does not silently
 fallback to default memory.
 
+Because ChatGPT allows Project memory settings to be changed later, CGW also
+reopens Project settings and re-verifies the currently selected memory mode
+before every workspace send. Failure to verify blocks the send. CGW cannot
+independently observe the service's asynchronous backend propagation after a
+human changes the setting, so users should not manually toggle memory mode on
+CGW-managed Projects when strict isolation matters.
+
 Local binding state stores only the opaque workspace id plus exact ChatGPT
 Project identity. Raw workspace paths and Git remote URLs are outside the MCP
 contract.
