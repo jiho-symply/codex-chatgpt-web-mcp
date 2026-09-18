@@ -118,65 +118,109 @@ re-sending the prompt.
 
 See [docs/reliability.md](docs/reliability.md).
 
-## Quick start
+## Install
 
-Requirements:
+### Requirements
 
-- Node.js 20+
-- a ChatGPT account you are authorized to use
-- a graphical session for the **initial manual login**
-- headless Chromium is sufficient after the browser profile is authenticated
+- **Node.js 20+** (`npm` / `npx` included)
+- **Git**
+- a ChatGPT account
+- Codex CLI, Codex UI/Desktop, or a Codex IDE integration
+- a local browser:
+  - **Windows:** Microsoft Edge or Google Chrome
+  - **Linux:** Google Chrome or Chromium
 
-```bash
-git clone https://github.com/jiho-symply/codex-chatgpt-web-mcp.git
-cd codex-chatgpt-web-mcp
+CGW automatically uses an installed Edge/Chrome/Chromium browser. A separate
+Playwright browser download is **not required for normal use**.
 
-npm install
-npx playwright install chromium
-npm run build
+### 1. Sign in to ChatGPT once
 
-# Initial login: this intentionally opens a real browser.
-node dist/cli.js login
-
-# Verify the persisted session works headlessly.
-node dist/cli.js doctor
-```
-
-On Linux servers you may need:
+Windows PowerShell and Linux use the same command:
 
 ```bash
-npx playwright install --with-deps chromium
+npx -y github:jiho-symply/codex-chatgpt-web-mcp login
 ```
 
-See [docs/headless-linux.md](docs/headless-linux.md) for initial-login options
-such as SSH X11 forwarding or a temporary VNC/noVNC desktop.
+A real browser opens. Complete login, CAPTCHA, or 2FA yourself. CGW stores the
+authenticated browser profile in your OS user state directory, outside your
+repositories. Normal MCP operation is headless after this one-time login.
 
-## Connect to Codex
+### 2. Add CGW to Codex
 
-Run:
+Recommended for **both Codex CLI and Codex UI/IDE users**:
 
 ```bash
-node dist/cli.js codex-config
+codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
 ```
 
-It prints a TOML block using the current absolute executable path. Add the
-result to `~/.codex/config.toml`.
+That's it.
 
-Equivalent shape:
+Codex CLI, the Codex/ChatGPT desktop app, and Codex IDE integrations on the same
+host share the Codex MCP configuration, so you normally register the server only
+once.
 
-```toml
-[mcp_servers.chatgpt_web]
-command = "/absolute/path/to/node"
-args = ["/absolute/path/to/codex-chatgpt-web-mcp/dist/cli.js", "mcp"]
-startup_timeout_sec = 30
-tool_timeout_sec = 600
+#### Codex CLI / terminal UI
+
+Check the registration:
+
+```bash
+codex mcp list
 ```
 
-Then Codex can use the asynchronous turn tools as a subagent interface without
-giving ChatGPT direct workspace access.
+Inside the Codex terminal UI, you can also run:
 
-See [docs/codex.md](docs/codex.md).
+```text
+/mcp
+```
 
+#### Codex UI / Desktop / IDE
+
+After running the same `codex mcp add ...` command, restart the Codex client.
+`chatgpt-web` should appear in its MCP server list.
+
+If you prefer to configure it entirely from the UI:
+
+1. Open **Settings → MCP Servers**
+2. Choose **Add Server**
+3. Select **STDIO**
+4. Name it `chatgpt-web`
+5. Use this command:
+
+```text
+npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+```
+
+6. Save and restart the client
+
+On Windows, if a UI cannot resolve `npx`, use `npx.cmd` as the executable.
+
+> **Windows + WSL:** native Windows Codex and WSL Codex use different Codex home
+> directories by default. Register CGW in each environment, or point WSL's
+> `CODEX_HOME` at the Windows Codex home if you intentionally want them to share
+> configuration.
+
+Official Codex MCP documentation:
+https://developers.openai.com/docs/extend/mcp
+
+### Verify the saved ChatGPT session
+
+```bash
+npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
+```
+
+### Remove from Codex
+
+```bash
+codex mcp remove chatgpt-web
+```
+
+### Linux without a desktop
+
+The initial login needs a visible browser once. On a headless Linux server, use
+X11 forwarding or a temporary trusted VNC/noVNC session, complete login, then
+return to normal headless operation.
+
+See [docs/headless-linux.md](docs/headless-linux.md).
 ## Typical coding workflow
 
 Codex remains the orchestrator:
@@ -302,7 +346,7 @@ automatically. See [docs/web-ui-state.md](docs/web-ui-state.md).
 Use the live account-specific picker:
 
 ```bash
-node dist/cli.js models
+npx -y github:jiho-symply/codex-chatgpt-web-mcp models
 ```
 
 Or let Codex call `chatgpt_capabilities`.
@@ -316,11 +360,12 @@ failure returns `UI_CHANGED` instead of guessing.
 
 ## Headless operation
 
-The MCP command is headless by default.
+The MCP command is headless by default. CGW prefers the system browser already
+installed on the machine: Edge/Chrome on Windows and Chrome/Chromium on Linux.
 
 The initial login is deliberately manual: this project does not accept account
 passwords or automate CAPTCHA/2FA. Once authenticated, the persistent profile
-can be reused by headless Chromium on the same trusted machine.
+can be reused headlessly on the same trusted machine.
 
 For servers without a desktop, use one of the documented temporary display
 methods for the first login, then remove the display service.
@@ -331,7 +376,8 @@ methods for the first login, then remove the display service.
 | --- | --- | --- |
 | `CGW_STATE_DIR` | OS state directory | Browser profile + local state root |
 | `CGW_HEADLESS` | `true` for MCP/doctor | Run browser without a visible window |
-| `CGW_BROWSER_CHANNEL` | bundled Chromium | Optional Playwright browser channel such as `chrome` |
+| `CGW_BROWSER_CHANNEL` | auto-detect | Optional Playwright browser channel such as `chrome` or `msedge` |
+| `CGW_BROWSER_EXECUTABLE` | auto-detect | Optional absolute path to a browser executable |
 | `CGW_TIMEOUT_MS` | `180000` | Default ChatGPT generation timeout |
 | `CGW_STABLE_MS` | `5000` | Fallback text-stability interval used when no Copy control is detectable |
 | `CGW_INPUT_TTL_HOURS` | `24` | Local private input-staging TTL (1-168 hours) |
@@ -341,6 +387,35 @@ Response asset retrieval is capped at 25 MiB per asset.
 
 There is intentionally no configurable remote origin.
 
+## Browser selection
+
+Without configuration, CGW tries normal system browsers first:
+
+- **Windows:** Microsoft Edge → Google Chrome → already-installed Playwright Chromium
+- **Linux:** Google Chrome/Chromium → Microsoft Edge if installed → already-installed Playwright Chromium
+
+If no supported browser is installed, install Edge/Chrome/Chromium. Playwright
+Chromium remains an optional fallback:
+
+```bash
+npx playwright install chromium
+```
+
+## Development
+
+Normal users do **not** need to clone or build this repository. GitHub `npx`
+installation runs the package's `prepare` build automatically.
+
+For development only:
+
+```bash
+git clone https://github.com/jiho-symply/codex-chatgpt-web-mcp.git
+cd codex-chatgpt-web-mcp
+npm install
+npm run typecheck
+npm test
+npm run build
+```
 ## Docker
 
 A Dockerfile is included for **headless operation after a profile has been
