@@ -130,6 +130,12 @@ export async function extractResponseManifest(input: {
         try {
           const url = new URL(href, location.href);
           if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+          for (const key of Array.from(url.searchParams.keys())) {
+            if (/(?:token|auth|signature|sig|session|api[_-]?key|access[_-]?key|code)/i.test(key)) {
+              url.searchParams.delete(key);
+            }
+          }
+          url.hash = "";
           const value = url.toString();
           return value.length <= 2048 ? value : null;
         } catch {
