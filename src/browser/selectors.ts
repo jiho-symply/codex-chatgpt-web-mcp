@@ -20,6 +20,17 @@ export const STOP_BUTTON_SELECTORS = [
   "button[aria-label*=\"중지\"]",
 ] as const;
 
+export const CONTINUE_BUTTON_SELECTORS = [
+  "button:has-text(\"Continue generating\")",
+  "button:has-text(\"계속 생성\")",
+] as const;
+
+export const COPY_BUTTON_SELECTORS = [
+  "button[data-testid*=\"copy\"]",
+  "button[aria-label*=\"Copy\" i]",
+  "button[aria-label*=\"복사\"]",
+] as const;
+
 export const MODEL_PICKER_SELECTORS = [
   "[data-testid=\"model-switcher-dropdown-button\"]",
   "button[data-testid*=\"model-switcher\"]",
@@ -39,6 +50,8 @@ export const PICKER_OPTION_SELECTOR =
   "[role=\"menuitem\"]:visible, [role=\"menuitemradio\"]:visible, [role=\"option\"]:visible";
 
 export const ASSISTANT_MESSAGE_SELECTOR = "[data-message-author-role=\"assistant\"]";
+export const GLOBAL_ERROR_SELECTOR =
+  "[role=\"alert\"]:visible, [data-testid*=\"error\"]:visible";
 
 export function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();

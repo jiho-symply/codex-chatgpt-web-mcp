@@ -2,7 +2,10 @@ import { Buffer } from "node:buffer";
 import type { Locator, Page } from "playwright";
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  CONTINUE_BUTTON_SELECTORS,
+  COPY_BUTTON_SELECTORS,
   EFFORT_PICKER_SELECTORS,
+  GLOBAL_ERROR_SELECTOR,
   MODEL_PICKER_SELECTORS,
   PICKER_OPTION_SELECTOR,
   PROMPT_SELECTORS,
@@ -19,11 +22,15 @@ import { BrowserRuntime } from "./runtime.js";
 
 export type ChatGptErrorCode =
   | "AUTH_REQUIRED"
+  | "CHALLENGE_REQUIRED"
+  | "SESSION_LOST"
+  | "CONVERSATION_NOT_FOUND"
+  | "RATE_LIMITED"
+  | "REMOTE_ERROR"
   | "UI_CHANGED"
   | "MODEL_UNAVAILABLE"
   | "EFFORT_UNAVAILABLE"
-  | "PROMPT_TOO_LARGE"
-  | "TIMEOUT";
+  | "PROMPT_TOO_LARGE";
 
 export class ChatGptWebError extends Error {
   constructor(
@@ -47,21 +54,26 @@ export interface ChatGptCapabilities {
   flattenedPicker: boolean;
 }
 
-export interface ChatRequest {
+export interface BrowserDispatchRequest {
   prompt: string;
   conversationId?: string;
   model?: string;
   effort?: string;
-  timeoutMs?: number;
 }
 
-export interface ChatResponse {
+export interface BrowserTurnDispatch {
   conversationId: string | null;
-  response: string;
+  baselineAssistantCount: number;
+}
+
+export interface BrowserTurnSnapshot {
+  conversationId: string | null;
+  complete: boolean;
+  paused: boolean;
+  generating: boolean;
+  response: string | null;
   responseBytes: number;
   truncated: boolean;
-  requestedModel: string | null;
-  requestedEffort: string | null;
 }
 
 function preserveMessageText(value: string): string {
@@ -93,21 +105,55 @@ async function waitForFirstVisible(
 async function isLoginWall(page: Page): Promise<boolean> {
   const url = page.url().toLowerCase();
   if (url.includes("/auth/login") || url.includes("/auth/signup")) return true;
-
   const login = page.getByRole("button", { name: /log in|login|로그인/i }).first();
   return login.isVisible().catch(() => false);
 }
 
-async function pickerInfo(
-  page: Page,
-  selectors: readonly string[]
-): Promise<PickerInfo> {
+async function challengePresent(page: Page): Promise<boolean> {
+  const url = page.url().toLowerCase();
+  if (url.includes("/cdn-cgi/") || url.includes("challenge")) return true;
+  const title = (await page.title().catch(() => "")).toLowerCase();
+  if (title.includes("just a moment")) return true;
+  const visible = await page
+    .getByText(/verify you are human|checking your browser|사람인지 확인/i)
+    .first()
+    .isVisible()
+    .catch(() => false);
+  return visible;
+}
+
+async function throwPageProblem(page: Page): Promise<void> {
+  if (await isLoginWall(page)) {
+    throw new ChatGptWebError(
+      "AUTH_REQUIRED",
+      "ChatGPT authentication is required. Run cgw login in an interactive session."
+    );
+  }
+  if (await challengePresent(page)) {
+    throw new ChatGptWebError(
+      "CHALLENGE_REQUIRED",
+      "ChatGPT is showing a browser verification challenge. Complete it manually; this proxy does not bypass challenges."
+    );
+  }
+
+  const alerts = uniqueOptions(
+    await page.locator(GLOBAL_ERROR_SELECTOR).allInnerTexts().catch(() => [])
+  );
+  const joined = alerts.join(" | ");
+  if (/rate limit|too many requests|usage limit|try again later|잠시 후 다시/i.test(joined)) {
+    throw new ChatGptWebError("RATE_LIMITED", joined || "ChatGPT rate limit reached.");
+  }
+  if (/something went wrong|network error|오류가 발생|문제가 발생/i.test(joined)) {
+    throw new ChatGptWebError("REMOTE_ERROR", joined);
+  }
+}
+
+async function pickerInfo(page: Page, selectors: readonly string[]): Promise<PickerInfo> {
   const button = await firstVisible(page, selectors);
   if (!button) return { found: false, current: null, options: [] };
 
   const current = normalizeText(await button.innerText().catch(() => ""));
   await button.click();
-
   try {
     await page.waitForTimeout(150);
     const values = await page.locator(PICKER_OPTION_SELECTOR).allInnerTexts();
@@ -131,7 +177,7 @@ async function selectExact(
   if (!button) {
     throw new ChatGptWebError(
       "UI_CHANGED",
-      "Could not find the ChatGPT picker required to select \"" + label + "\"."
+      'Could not find the ChatGPT picker required to select "' + label + '".'
     );
   }
 
@@ -159,14 +205,21 @@ async function selectExact(
 
     throw new ChatGptWebError(
       code,
-      "Requested option \"" +
+      'Requested option "' +
         label +
-        "\" is unavailable. Visible options: " +
+        '" is unavailable. Visible options: ' +
         (uniqueOptions(available).join(", ") || "(none)")
     );
   } finally {
     await page.keyboard.press("Escape").catch(() => undefined);
   }
+}
+
+async function messageHasCopyButton(message: Locator): Promise<boolean> {
+  for (const selector of COPY_BUTTON_SELECTORS) {
+    if (await message.locator(selector).first().isVisible().catch(() => false)) return true;
+  }
+  return false;
 }
 
 export class ChatGptWebClient {
@@ -180,10 +233,21 @@ export class ChatGptWebClient {
       if (!isValidConversationId(conversationId)) {
         throw new Error("Invalid ChatGPT conversation id.");
       }
-      await page.goto(CHATGPT_ORIGIN + "/c/" + conversationId, {
+      const response = await page.goto(CHATGPT_ORIGIN + "/c/" + conversationId, {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
       });
+      if (response && [404, 410].includes(response.status())) {
+        throw new ChatGptWebError(
+          "CONVERSATION_NOT_FOUND",
+          "ChatGPT conversation was not found: " + conversationId
+        );
+      }
+      await throwPageProblem(page);
+      const actual = extractConversationId(page.url());
+      if (actual && actual !== conversationId) {
+        throw new ChatGptWebError("SESSION_LOST", "ChatGPT opened a different conversation than requested.");
+      }
       return;
     }
 
@@ -191,19 +255,23 @@ export class ChatGptWebClient {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
+    await throwPageProblem(page);
+  }
+
+  private async ensureConversation(page: Page, conversationId: string | null): Promise<void> {
+    if (!conversationId) {
+      const current = extractConversationId(page.url());
+      if (!current) await throwPageProblem(page);
+      return;
+    }
+    if (extractConversationId(page.url()) === conversationId) return;
+    await this.navigate(page, conversationId);
   }
 
   private async requireComposer(page: Page): Promise<Locator> {
     const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 15_000);
     if (composer) return composer;
-
-    if (await isLoginWall(page)) {
-      throw new ChatGptWebError(
-        "AUTH_REQUIRED",
-        "ChatGPT authentication is required. Run cgw login in an interactive session."
-      );
-    }
-
+    await throwPageProblem(page);
     throw new ChatGptWebError(
       "UI_CHANGED",
       "Could not find the ChatGPT prompt composer. The web UI may have changed."
@@ -218,7 +286,6 @@ export class ChatGptWebClient {
   }> {
     const page = await this.runtime.page();
     await this.navigate(page);
-
     const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 10_000);
     const authenticated = Boolean(composer);
     return {
@@ -233,10 +300,8 @@ export class ChatGptWebClient {
     const page = await this.runtime.page();
     await this.navigate(page);
     await this.requireComposer(page);
-
     const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
     const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
-
     return {
       modelPicker,
       effortPicker,
@@ -245,9 +310,7 @@ export class ChatGptWebClient {
   }
 
   private async applySelections(page: Page, model?: string, effort?: string): Promise<void> {
-    if (model) {
-      await selectExact(page, MODEL_PICKER_SELECTORS, model, "MODEL_UNAVAILABLE");
-    }
+    if (model) await selectExact(page, MODEL_PICKER_SELECTORS, model, "MODEL_UNAVAILABLE");
     if (effort) {
       const effortButton = await firstVisible(page, EFFORT_PICKER_SELECTORS);
       if (effortButton) {
@@ -258,58 +321,13 @@ export class ChatGptWebClient {
     }
   }
 
-  private async generationActive(page: Page): Promise<boolean> {
-    return Boolean(await firstVisible(page, STOP_BUTTON_SELECTORS));
-  }
-
-  private async waitForAssistant(
-    page: Page,
-    previousCount: number,
-    timeoutMs: number
-  ): Promise<string> {
-    const deadline = Date.now() + timeoutMs;
-    let lastText = "";
-    let stablePolls = 0;
-
-    while (Date.now() < deadline) {
-      const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
-      const count = await messages.count();
-
-      if (count > previousCount) {
-        const text = preserveMessageText(await messages.last().innerText().catch(() => ""));
-        if (text && text === lastText) stablePolls++;
-        else stablePolls = 0;
-        lastText = text;
-
-        if (text && stablePolls >= 2 && !(await this.generationActive(page))) {
-          return text;
-        }
-      }
-
-      if (await isLoginWall(page)) {
-        throw new ChatGptWebError("AUTH_REQUIRED", "ChatGPT session expired during generation.");
-      }
-
-      await page.waitForTimeout(500);
-    }
-
-    throw new ChatGptWebError(
-      "TIMEOUT",
-      "ChatGPT did not finish within " + timeoutMs + " ms."
-    );
-  }
-
-  async chat(input: ChatRequest): Promise<ChatResponse> {
+  async dispatch(input: BrowserDispatchRequest): Promise<BrowserTurnDispatch> {
     const promptBytes = Buffer.byteLength(input.prompt, "utf8");
     if (promptBytes === 0) throw new Error("Prompt must not be empty.");
     if (promptBytes > this.config.maxPromptBytes) {
       throw new ChatGptWebError(
         "PROMPT_TOO_LARGE",
-        "Prompt is " +
-          promptBytes +
-          " UTF-8 bytes; limit is " +
-          this.config.maxPromptBytes +
-          "."
+        "Prompt is " + promptBytes + " UTF-8 bytes; limit is " + this.config.maxPromptBytes + "."
       );
     }
 
@@ -318,32 +336,116 @@ export class ChatGptWebClient {
     const composer = await this.requireComposer(page);
     await this.applySelections(page, input.model, input.effort);
 
-    const previousCount = await page.locator(ASSISTANT_MESSAGE_SELECTOR).count();
-
+    const baselineAssistantCount = await page.locator(ASSISTANT_MESSAGE_SELECTOR).count();
     await composer.fill(input.prompt);
     await page.waitForTimeout(100);
 
     const send = await firstVisible(page, SEND_BUTTON_SELECTORS);
-    if (send && (await send.isEnabled().catch(() => false))) {
-      await send.click();
-    } else {
-      await composer.press("Enter");
+    if (send && (await send.isEnabled().catch(() => false))) await send.click();
+    else await composer.press("Enter");
+
+    const deadline = Date.now() + 10_000;
+    let conversationId = input.conversationId ?? extractConversationId(page.url());
+    while (!conversationId && Date.now() < deadline) {
+      await throwPageProblem(page);
+      await page.waitForTimeout(250);
+      conversationId = extractConversationId(page.url());
     }
 
-    const response = await this.waitForAssistant(
-      page,
-      previousCount,
-      input.timeoutMs ?? this.config.timeoutMs
-    );
+    return { conversationId, baselineAssistantCount };
+  }
 
-    const bounded = truncateUtf8(response, this.config.maxResponseBytes);
+  async inspectTurn(input: {
+    conversationId: string | null;
+    baselineAssistantCount: number;
+    timeoutMs: number;
+  }): Promise<BrowserTurnSnapshot> {
+    const page = await this.runtime.page();
+    await this.ensureConversation(page, input.conversationId);
+
+    const deadline = Date.now() + Math.max(0, input.timeoutMs);
+    let lastText = "";
+    let stableSince = Date.now();
+    let first = true;
+
+    do {
+      await throwPageProblem(page);
+      const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
+      const count = await messages.count();
+      const stopVisible = Boolean(await firstVisible(page, STOP_BUTTON_SELECTORS));
+      const paused = Boolean(await firstVisible(page, CONTINUE_BUTTON_SELECTORS));
+
+      let response: string | null = null;
+      let copyVisible = false;
+      if (count > input.baselineAssistantCount) {
+        const message = messages.last();
+        response = preserveMessageText(await message.innerText().catch(() => ""));
+        copyVisible = await messageHasCopyButton(message);
+      }
+
+      if (response !== lastText) {
+        lastText = response ?? "";
+        stableSince = Date.now();
+      }
+
+      const stableLongEnough = Boolean(response) && Date.now() - stableSince >= 2_500;
+      const complete =
+        Boolean(response) && !stopVisible && !paused && (copyVisible || stableLongEnough);
+
+      if (complete || paused || input.timeoutMs === 0) {
+        const bounded = truncateUtf8(response ?? "", this.config.maxResponseBytes);
+        return {
+          conversationId: extractConversationId(page.url()) ?? input.conversationId,
+          complete,
+          paused,
+          generating: !complete && !paused,
+          response: response === null ? null : bounded.text,
+          responseBytes: bounded.bytes,
+          truncated: bounded.truncated,
+        };
+      }
+
+      first = false;
+      if (Date.now() >= deadline) break;
+      await page.waitForTimeout(500);
+    } while (first || Date.now() <= deadline);
+
+    const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
+    const count = await messages.count();
+    const response =
+      count > input.baselineAssistantCount
+        ? preserveMessageText(await messages.last().innerText().catch(() => ""))
+        : null;
+    const bounded = truncateUtf8(response ?? "", this.config.maxResponseBytes);
     return {
-      conversationId: extractConversationId(page.url()),
-      response: bounded.text,
+      conversationId: extractConversationId(page.url()) ?? input.conversationId,
+      complete: false,
+      paused: Boolean(await firstVisible(page, CONTINUE_BUTTON_SELECTORS)),
+      generating: true,
+      response: response === null ? null : bounded.text,
       responseBytes: bounded.bytes,
       truncated: bounded.truncated,
-      requestedModel: input.model ?? null,
-      requestedEffort: input.effort ?? null,
     };
+  }
+
+  async stopTurn(input: {
+    conversationId: string | null;
+    baselineAssistantCount: number;
+  }): Promise<BrowserTurnSnapshot> {
+    const page = await this.runtime.page();
+    await this.ensureConversation(page, input.conversationId);
+    const stop = await firstVisible(page, STOP_BUTTON_SELECTORS);
+    if (stop) {
+      await stop.click();
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && (await firstVisible(page, STOP_BUTTON_SELECTORS))) {
+        await page.waitForTimeout(200);
+      }
+    }
+    return this.inspectTurn({
+      conversationId: extractConversationId(page.url()) ?? input.conversationId,
+      baselineAssistantCount: input.baselineAssistantCount,
+      timeoutMs: 0,
+    });
   }
 }
