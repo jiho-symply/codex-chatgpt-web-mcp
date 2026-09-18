@@ -5,6 +5,7 @@ import type {
   BrowserTurnSnapshot,
 } from "../browser/chatgpt.js";
 import { ChatGptWebError } from "../browser/chatgpt.js";
+import { WorkspaceProjectError } from "../projects/browser.js";
 import type { ResponseManifest } from "../browser/response-extractor.js";
 import type { ChatGptUiSnapshot } from "../browser/ui-state.js";
 import {
@@ -117,7 +118,9 @@ export class TurnManager {
       const code =
         error instanceof ChatGptWebError
           ? error.code
-          : error instanceof TurnStoreError
+          : error instanceof WorkspaceProjectError
+            ? error.code
+            : error instanceof TurnStoreError
             ? error.code
             : "INTERNAL_ERROR";
       this.store.update(reserved.record.turnId, {
@@ -226,6 +229,7 @@ export class TurnManager {
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.inputAssetIds ? { inputAssetIds: input.inputAssetIds } : {}),
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     });
 
