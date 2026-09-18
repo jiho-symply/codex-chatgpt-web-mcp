@@ -53,12 +53,25 @@ The persistent browser profile contains authentication state and is sensitive.
 | Remote MCP exposure | MCP transport is stdio only; no TCP listener |
 | Arbitrary browser navigation | Navigation is fixed to `https://chatgpt.com` and validated conversation URLs |
 | Concurrent chat cross-talk | Browser operations are serialized |
+| Duplicate prompt after timeout/retry | Caller request id is reserved before dispatch; same id+payload is deduplicated and different payload conflicts |
+| Crash between local reservation and send confirmation | Fail-safe at-most-once behavior: ambiguous `reserved` turns are never auto-re-sent |
+| Long generation coupled to one MCP timeout | Persistent turn metadata + bounded wait slices + reply recovery |
 | Oversized prompt/response memory use | Local UTF-8 byte caps |
 | UI selector ambiguity | Fail closed with `UI_CHANGED`; do not guess requested model/effort |
 | CAPTCHA / login challenge | Human action required; no bypass or stealth implementation |
 | Browser profile used by two processes | Atomic profile lock with stale-lock recovery |
 | Browser downloads | Playwright context uses `acceptDownloads: false` |
 | Website popup/new-tab surprises | Core chat workflow never follows assistant links or arbitrary navigation |
+
+## Turn state
+
+The reliability layer persists only turn metadata outside the workspace:
+request id, SHA-256 request payload hash, conversation/turn identifiers, model
+labels, status, timestamps, and error code. It does **not** persist prompt or
+response bodies.
+
+Turn-state files use owner-only permissions where supported and reject
+symlinked state files.
 
 ## Authentication
 

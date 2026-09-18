@@ -2,6 +2,18 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "../config.js";
 import { ProfileLock } from "./profile-lock.js";
 
+export type BrowserRuntimeErrorCode = "PROFILE_BUSY" | "BROWSER_NOT_INSTALLED";
+
+export class BrowserRuntimeError extends Error {
+  constructor(
+    public readonly code: BrowserRuntimeErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = "BrowserRuntimeError";
+  }
+}
+
 export class BrowserRuntime {
   private context: BrowserContext | null = null;
   private lock: ProfileLock | null = null;
@@ -15,8 +27,8 @@ export class BrowserRuntime {
   async start(): Promise<BrowserContext> {
     if (this.context) return this.context;
 
-    this.lock = ProfileLock.acquire(this.config.profileDir);
     try {
+      this.lock = ProfileLock.acquire(this.config.profileDir);
       const channel = this.config.browserChannel;
       this.context = await chromium.launchPersistentContext(this.config.profileDir, {
         headless: this.config.headless,
@@ -28,11 +40,15 @@ export class BrowserRuntime {
       this.context.setDefaultTimeout(15_000);
       return this.context;
     } catch (error) {
-      this.lock.release();
+      this.lock?.release();
       this.lock = null;
       const message = error instanceof Error ? error.message : String(error);
+      if (/already in use|profile.*use/i.test(message)) {
+        throw new BrowserRuntimeError("PROFILE_BUSY", message);
+      }
       if (/executable.*doesn.t exist|browser.*not found|playwright.*install/i.test(message)) {
-        throw new Error(
+        throw new BrowserRuntimeError(
+          "BROWSER_NOT_INSTALLED",
           "Playwright Chromium is not installed. Run: npx playwright install chromium " +
             "(or --with-deps chromium on Linux)."
         );

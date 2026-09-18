@@ -65,6 +65,8 @@ Codex가 검증/적용/테스트
 - Cookie/token/password/profile을 읽어오는 MCP tool은 존재하지 않습니다.
 - 로그인, CAPTCHA, 2FA 우회 기능을 구현하지 않습니다.
 - 한 browser profile에서 요청을 직렬화하여 대화 race를 막습니다.
+- request id를 browser 전송 전에 저장해 재시도에 따른 중복 prompt를 막습니다.
+- 긴 응답은 하나의 긴 MCP call에 묶지 않고 turn 상태로 복구할 수 있습니다.
 - ChatGPT 응답은 항상 **untrusted text**로 취급합니다.
 - 이 MCP는 patch를 적용하거나 shell/git을 실행할 수 없습니다.
 
@@ -82,9 +84,22 @@ Codex가 검증/적용/테스트
 현재 계정의 ChatGPT Web에서 실제로 보이는 모델/effort 선택지를 읽습니다.
 모델 목록을 코드에 고정하지 않습니다.
 
+### `chatgpt_send` / `chatgpt_wait` / `chatgpt_get_reply` / `chatgpt_stop`
+
+긴 reasoning 작업에서는 이 비동기 도구들을 기본으로 사용합니다.
+
+- `chatgpt_send`: prompt를 한 번만 전송하고 `turn_id` 반환
+- `request_id`: 동일 요청의 중복 전송을 막는 idempotency key
+- `chatgpt_wait`: 기본 30초 단위로 기다리고, 아직 생성 중이면 그대로 복귀
+- `chatgpt_get_reply`: 새 메시지 없이 현재 응답 상태 확인
+- `chatgpt_stop`: 해당 turn만 중지
+
 ### `chatgpt_chat`
 
-새 대화 또는 기존 `conversation_id`에 prompt를 보내고 응답을 반환합니다.
+짧은 작업을 위한 호환 wrapper입니다. 전체 timeout이 나더라도 `turnId`를
+돌려주므로 같은 prompt를 다시 보내지 않고 `wait/get_reply`로 복구할 수 있습니다.
+
+자세한 동작은 [docs/reliability.md](docs/reliability.md)를 참고하세요.
 
 Codex는 필요한 코드만 prompt에 포함시키고, 반환된 코드/diff를 로컬에서 검증한
 뒤 적용할 수 있습니다.
@@ -145,7 +160,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 600
 ```
 
-이후 Codex가 `chatgpt_chat`을 subagent처럼 호출할 수 있습니다.
+이후 Codex가 ChatGPT Web을 비동기 subagent처럼 호출할 수 있습니다.
 
 ## 권장 coding 흐름
 
@@ -153,7 +168,8 @@ tool_timeout_sec = 600
 Codex
  ├─ repository 탐색
  ├─ 관련 파일만 선택
- ├─ ChatGPT에 task + context 전달
+ ├─ request_id와 함께 task + context 전송
+ ├─ turn_id를 저장하고 bounded wait
  │
  ▼
 ChatGPT

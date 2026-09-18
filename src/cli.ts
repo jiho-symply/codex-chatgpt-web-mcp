@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { loadConfig, CHATGPT_ORIGIN } from "./config.js";
 import { BrowserRuntime } from "./browser/runtime.js";
 import { ChatGptWebClient } from "./browser/chatgpt.js";
+import { TurnManager } from "./turns/manager.js";
+import { TurnStore } from "./turns/store.js";
 import { runMcpServer } from "./mcp/server.js";
 import { PRODUCT_NAME, VERSION } from "./version.js";
 
@@ -22,20 +24,31 @@ function say(value: unknown): void {
   );
 }
 
+function parseInteger(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) throw new InvalidArgumentError("expected an integer");
+  return parsed;
+}
+
 function hasInteractiveDisplay(): boolean {
   if (process.platform === "win32" || process.platform === "darwin") return true;
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
-async function withClient<T>(
+async function withContext<T>(
   headless: boolean,
-  fn: (client: ChatGptWebClient, runtime: BrowserRuntime) => Promise<T>
+  fn: (
+    client: ChatGptWebClient,
+    runtime: BrowserRuntime,
+    turns: TurnManager
+  ) => Promise<T>
 ): Promise<T> {
   const config = loadConfig({ headless });
   const runtime = new BrowserRuntime(config);
   const client = new ChatGptWebClient(runtime, config);
+  const turns = new TurnManager(client, new TurnStore(config.stateDir));
   try {
-    return await fn(client, runtime);
+    return await fn(client, runtime, turns);
   } finally {
     await runtime.close();
   }
@@ -63,7 +76,7 @@ program
       throw new Error("cgw login requires an interactive terminal.");
     }
 
-    await withClient(false, async (client, runtime) => {
+    await withContext(false, async (client, runtime) => {
       const page = await runtime.page();
       await page.goto(CHATGPT_ORIGIN, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
@@ -98,7 +111,7 @@ program
   .description("Verify Playwright, browser profile, authentication, and ChatGPT UI")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { json: boolean }) => {
-    const result = await withClient(true, (client) => client.status());
+    const result = await withContext(true, (client) => client.status());
     if (opts.json) {
       say({ ok: result.authenticated && result.uiReady, ...result });
       return;
@@ -117,32 +130,97 @@ program
   .command("models")
   .description("Show model/effort choices discovered from the live ChatGPT Web UI")
   .action(async () => {
-    say(await withClient(true, (client) => client.capabilities()));
+    say(await withContext(true, (client) => client.capabilities()));
+  });
+
+program
+  .command("send")
+  .description("Send a turn without waiting for completion")
+  .argument("<prompt>", "prompt text")
+  .requiredOption("--request-id <id>", "idempotency key; reuse to prevent duplicate sends")
+  .option("--conversation <id>")
+  .option("--model <label>")
+  .option("--effort <label>")
+  .action(
+    async (
+      prompt: string,
+      opts: { requestId: string; conversation?: string; model?: string; effort?: string }
+    ) => {
+      say(
+        await withContext(true, (_client, _runtime, turns) =>
+          turns.send({
+            requestId: opts.requestId,
+            prompt,
+            ...(opts.conversation ? { conversationId: opts.conversation } : {}),
+            ...(opts.model ? { model: opts.model } : {}),
+            ...(opts.effort ? { effort: opts.effort } : {}),
+          })
+        )
+      );
+    }
+  );
+
+program
+  .command("wait")
+  .description("Wait for a bounded slice of an existing turn")
+  .argument("<turn-id>")
+  .option("--timeout-ms <n>", "wait slice, 1000-120000 ms", parseInteger, 30_000)
+  .action(async (turnId: string, opts: { timeoutMs: number }) => {
+    say(
+      await withContext(true, (_client, _runtime, turns) =>
+        turns.wait(turnId, Math.max(1_000, Math.min(120_000, opts.timeoutMs)))
+      )
+    );
+  });
+
+program
+  .command("get-reply")
+  .description("Inspect the current reply for an existing turn without sending")
+  .argument("<turn-id>")
+  .action(async (turnId: string) => {
+    say(await withContext(true, (_client, _runtime, turns) => turns.getReply(turnId)));
+  });
+
+program
+  .command("stop")
+  .description("Stop generation for an existing turn")
+  .argument("<turn-id>")
+  .action(async (turnId: string) => {
+    say(await withContext(true, (_client, _runtime, turns) => turns.stop(turnId)));
   });
 
 program
   .command("chat")
-  .description("Send a one-off ChatGPT Web message for diagnostics")
+  .description("Compatibility command: send and wait for a ChatGPT Web response")
   .argument("<prompt>", "prompt text")
+  .option("--request-id <id>", "optional idempotency key")
   .option("--conversation <id>")
   .option("--model <label>")
   .option("--effort <label>")
-  .option("--timeout-ms <n>", "generation timeout", (value) => Number.parseInt(value, 10))
+  .option("--timeout-ms <n>", "overall generation timeout", parseInteger, 180_000)
   .action(
     async (
       prompt: string,
-      opts: { conversation?: string; model?: string; effort?: string; timeoutMs?: number }
+      opts: {
+        requestId?: string;
+        conversation?: string;
+        model?: string;
+        effort?: string;
+        timeoutMs: number;
+      }
     ) => {
-      const result = await withClient(true, (client) =>
-        client.chat({
+      const result = await withContext(true, (_client, _runtime, turns) =>
+        turns.chat({
           prompt,
+          timeoutMs: Math.max(10_000, Math.min(600_000, opts.timeoutMs)),
+          ...(opts.requestId ? { requestId: opts.requestId } : {}),
           ...(opts.conversation ? { conversationId: opts.conversation } : {}),
           ...(opts.model ? { model: opts.model } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
-          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
         })
       );
       say(result);
+      if (result.timedOut || result.paused || result.status === "error") process.exitCode = 2;
     }
   );
 
