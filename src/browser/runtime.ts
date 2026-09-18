@@ -55,6 +55,7 @@ export function browserLaunchCandidates(
   }
 
   const result: BrowserLaunchCandidate[] = [];
+  const joinPath = platform === "win32" ? path.win32.join : path.join;
   const addPath = (label: string, value: string | undefined) => {
     const found = existing(value, exists);
     if (found && !result.some((item) => item.executablePath === found)) {
@@ -70,31 +71,31 @@ export function browserLaunchCandidates(
     addPath(
       "Microsoft Edge",
       programFilesX86
-        ? path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe")
+        ? joinPath(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe")
         : undefined
     );
     addPath(
       "Microsoft Edge",
       programFiles
-        ? path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe")
+        ? joinPath(programFiles, "Microsoft", "Edge", "Application", "msedge.exe")
         : undefined
     );
     addPath(
       "Google Chrome",
       programFiles
-        ? path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe")
+        ? joinPath(programFiles, "Google", "Chrome", "Application", "chrome.exe")
         : undefined
     );
     addPath(
       "Google Chrome",
       programFilesX86
-        ? path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
+        ? joinPath(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
         : undefined
     );
     addPath(
       "Google Chrome",
       localAppData
-        ? path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe")
+        ? joinPath(localAppData, "Google", "Chrome", "Application", "chrome.exe")
         : undefined
     );
 
