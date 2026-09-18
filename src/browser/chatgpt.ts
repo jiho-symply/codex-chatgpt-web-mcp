@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { Buffer } from "node:buffer";
 import type { Locator, Page } from "playwright";
 import {
@@ -593,6 +594,62 @@ export class ChatGptWebClient {
     };
   }
 
+  private async downloadOpaqueFile(
+    page: Page,
+    record: ReturnType<AssetStore["get"]>,
+    message: Locator
+  ): Promise<SavedAsset> {
+    const candidates = message.locator(FILE_ASSET_SELECTOR);
+    if ((await candidates.count()) <= record.ordinal) {
+      throw new AssetStoreError("ASSET_NOT_FOUND", "File asset is no longer present in the response.");
+    }
+    const candidate = candidates.nth(record.ordinal);
+    let target = candidate;
+    const nested = candidate
+      .locator('a[download], button[data-testid*="download"], button[aria-label*="download" i]')
+      .first();
+    if (await nested.count()) target = nested;
+
+    const beforeUrl = page.url();
+    try {
+      const downloadPromise = page.waitForEvent("download", { timeout: 10_000 });
+      await target.click();
+      const download = await downloadPromise;
+      const failure = await download.failure();
+      if (failure) {
+        throw new ChatGptWebError("ASSET_RETRIEVAL_UNSUPPORTED", "ChatGPT download failed: " + failure);
+      }
+      const tempPath = await download.path();
+      if (!tempPath) {
+        throw new ChatGptWebError(
+          "ASSET_RETRIEVAL_UNSUPPORTED",
+          "ChatGPT download completed without a readable temporary file."
+        );
+      }
+      const stat = fs.statSync(tempPath);
+      if (stat.size > this.config.maxAssetBytes) {
+        await download.delete().catch(() => undefined);
+        throw new AssetStoreError(
+          "ASSET_TOO_LARGE",
+          "Downloaded asset is " + stat.size + " bytes; limit is " + this.config.maxAssetBytes + "."
+        );
+      }
+      const bytes = fs.readFileSync(tempPath);
+      const saved = this.assetStore.save(record, bytes, {
+        filename: download.suggestedFilename() || record.filename,
+        mime: record.mime,
+        maxBytes: this.config.maxAssetBytes,
+      });
+      await download.delete().catch(() => undefined);
+      return saved;
+    } catch (error) {
+      if (page.url() !== beforeUrl) {
+        await this.navigate(page, record.conversationId).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
   async getAsset(assetId: string): Promise<SavedAsset> {
     const record = this.assetStore.get(assetId);
     const page = await this.runtime.page();
@@ -603,7 +660,19 @@ export class ChatGptWebClient {
       throw new AssetStoreError("ASSET_NOT_FOUND", "Assistant response containing the asset is unavailable.");
     }
     const message = messages.nth(record.assistantIndex);
-    const source = await this.readAssetHref(record, message);
+    let source: { href: string; filename: string | null; mime: string | null };
+    try {
+      source = await this.readAssetHref(record, message);
+    } catch (error) {
+      if (
+        record.kind === "file" &&
+        error instanceof ChatGptWebError &&
+        error.code === "ASSET_RETRIEVAL_UNSUPPORTED"
+      ) {
+        return this.downloadOpaqueFile(page, record, message);
+      }
+      throw error;
+    }
 
     let bytes: Buffer;
     let mime = source.mime;
