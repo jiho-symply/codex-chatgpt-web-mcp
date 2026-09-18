@@ -1,34 +1,54 @@
 # Codex integration
 
-## Build first
+## Install
+
+Normal users do not need to clone or build CGW.
+
+### 1. Sign in to ChatGPT once
 
 ```bash
-npm install
-npx playwright install chromium
-npm run build
-node dist/cli.js doctor
+npx -y github:jiho-symply/codex-chatgpt-web-mcp login
 ```
 
-## Generate configuration
+### 2. Register the MCP server
 
 ```bash
-node dist/cli.js codex-config
+codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
 ```
 
-Paste the output into:
+This Codex MCP configuration is shared by Codex CLI, the Codex/ChatGPT desktop
+app, and Codex IDE integrations on the same host. Restart UI clients after
+adding the server.
 
-`~/.codex/config.toml`
+Verify from the CLI:
 
-The generated block uses absolute paths, similar to:
-
-```toml
-[mcp_servers.chatgpt_web]
-command = "/usr/bin/node"
-args = ["/home/user/codex-chatgpt-web-mcp/dist/cli.js", "mcp"]
-startup_timeout_sec = 30
-tool_timeout_sec = 600
+```bash
+codex mcp list
 ```
 
+or from the Codex terminal UI:
+
+```text
+/mcp
+```
+
+For UI-only setup, add a local **STDIO** MCP server named `chatgpt-web` with:
+
+```text
+npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+```
+
+On Windows, use `npx.cmd` if the UI cannot resolve `npx`.
+
+### Windows + WSL
+
+Native Windows Codex and Codex running inside WSL use different Codex home
+directories by default. Register CGW in both environments, or set WSL's
+`CODEX_HOME` to the Windows Codex home if you intentionally want shared MCP
+configuration.
+
+Official Codex MCP documentation:
+https://developers.openai.com/docs/extend/mcp
 ## Suggested use
 
 Use Codex as the orchestrator and ChatGPT as an untrusted external subagent.
