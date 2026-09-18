@@ -18,11 +18,13 @@ export interface ChatTurnBackend {
   dispatch(input: BrowserDispatchRequest): Promise<BrowserTurnDispatch>;
   inspectTurn(input: {
     conversationId: string | null;
+    projectId: string | null;
     baselineAssistantCount: number;
     timeoutMs: number;
   }): Promise<BrowserTurnSnapshot>;
   stopTurn(input: {
     conversationId: string | null;
+    projectId: string | null;
     baselineAssistantCount: number;
   }): Promise<BrowserTurnSnapshot>;
 }
@@ -34,12 +36,15 @@ export interface SendTurnInput {
   model?: string;
   effort?: string;
   inputAssetIds?: string[];
+  workspaceId?: string;
 }
 
 export interface TurnView {
   turnId: string;
   requestId: string;
   conversationId: string | null;
+  workspaceId: string | null;
+  projectId: string | null;
   status: TurnRecord["status"];
   deduplicated?: boolean;
   response?: string | null;
@@ -59,6 +64,8 @@ function view(record: TurnRecord, extra: Partial<TurnView> = {}): TurnView {
     turnId: record.turnId,
     requestId: record.requestId,
     conversationId: record.conversationId,
+    workspaceId: record.workspaceId,
+    projectId: record.projectId,
     status: record.status,
     lastErrorCode: record.lastErrorCode ?? null,
     requestedModel: record.requestedModel,
@@ -82,6 +89,7 @@ export class TurnManager {
       ...(input.model ? { model: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
       ...(input.inputAssetIds ? { inputAssetIds: input.inputAssetIds } : {}),
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     });
 
     if (reserved.deduplicated) {
@@ -95,9 +103,12 @@ export class TurnManager {
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { effort: input.effort } : {}),
         ...(input.inputAssetIds ? { inputAssetIds: input.inputAssetIds } : {}),
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       });
       const record = this.store.update(reserved.record.turnId, {
         conversationId: dispatched.conversationId,
+        workspaceId: dispatched.workspaceId ?? input.workspaceId ?? null,
+        projectId: dispatched.projectId,
         baselineAssistantCount: dispatched.baselineAssistantCount,
         status: "generating",
       });
@@ -119,8 +130,14 @@ export class TurnManager {
 
   private applySnapshot(record: TurnRecord, snapshot: BrowserTurnSnapshot): TurnView {
     let next = record;
-    if (snapshot.conversationId && snapshot.conversationId !== record.conversationId) {
-      next = this.store.update(record.turnId, { conversationId: snapshot.conversationId });
+    if (
+      (snapshot.conversationId && snapshot.conversationId !== record.conversationId) ||
+      snapshot.projectId !== record.projectId
+    ) {
+      next = this.store.update(record.turnId, {
+        ...(snapshot.conversationId ? { conversationId: snapshot.conversationId } : {}),
+        projectId: snapshot.projectId,
+      });
     }
     if (snapshot.complete && next.status !== "completed") {
       next = this.store.update(next.turnId, {
@@ -143,6 +160,7 @@ export class TurnManager {
     if (record.status === "reserved" || record.status === "error") return view(record);
     const snapshot = await this.client.inspectTurn({
       conversationId: record.conversationId,
+      projectId: record.projectId,
       baselineAssistantCount: record.baselineAssistantCount ?? 0,
       timeoutMs: 0,
     });
@@ -161,6 +179,7 @@ export class TurnManager {
 
     const snapshot = await this.client.inspectTurn({
       conversationId: record.conversationId,
+      projectId: record.projectId,
       baselineAssistantCount: record.baselineAssistantCount ?? 0,
       timeoutMs,
     });
@@ -179,10 +198,12 @@ export class TurnManager {
     }
     const snapshot = await this.client.stopTurn({
       conversationId: record.conversationId,
+      projectId: record.projectId,
       baselineAssistantCount: record.baselineAssistantCount ?? 0,
     });
     const next = this.store.update(turnId, {
       conversationId: snapshot.conversationId ?? record.conversationId,
+      projectId: snapshot.projectId,
       status: "stopped",
       completedAt: new Date().toISOString(),
     });
@@ -205,6 +226,7 @@ export class TurnManager {
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     });
 
     if (sent.status === "reserved" || sent.status === "error" || sent.status === "stopped") {
