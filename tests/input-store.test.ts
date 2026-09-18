@@ -36,6 +36,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     maxInputTotalBytes: 50 * 1024 * 1024,
     maxInputAttachments: 10,
     inputTtlMs: 24 * 60 * 60 * 1000,
+    requireWorkspaceProject: true,
     ...overrides,
   };
 }
