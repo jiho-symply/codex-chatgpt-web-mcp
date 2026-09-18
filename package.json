@@ -5,8 +5,8 @@
   "type": "module",
   "license": "MIT",
   "bin": {
-    "cgw": "./bin/cgw.mjs",
-    "codex-chatgpt-web-mcp": "./bin/cgw.mjs"
+    "cgw": "bin/cgw.mjs",
+    "codex-chatgpt-web-mcp": "bin/cgw.mjs"
   },
   "engines": {
     "node": ">=20"
