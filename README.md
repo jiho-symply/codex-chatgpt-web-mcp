@@ -64,6 +64,7 @@ origin.
   time to prevent cross-conversation races.
 - **Bounded I/O** — prompt, response, and explicitly retrieved asset sizes are capped locally.
 - **Private asset staging** — generated response assets are never downloaded to the workspace automatically.
+- **Explicit input staging** — ChatGPT attachments must be supplied as caller-provided text/base64 bytes; the proxy never reads arbitrary local paths.
 - **At-most-once sends** — request ids are persisted before browser dispatch so
   retries cannot duplicate prompts after transport/browser failures.
 - **Recoverable long turns** — turn metadata is stored outside the workspace;
@@ -187,6 +188,31 @@ Codex remains the orchestrator:
 
 ChatGPT does not need to know that Codex is the caller.
 
+## Explicit input attachments
+
+Codex can attach explicitly selected material without granting the proxy
+filesystem access.
+
+New tools:
+
+- `chatgpt_stage_text`
+- `chatgpt_stage_blob`
+- `chatgpt_list_staged_inputs`
+- `chatgpt_discard_staged_input`
+
+Then pass returned `input_asset_id` values to `chatgpt_send` or
+`chatgpt_chat`.
+
+The proxy never accepts an arbitrary local path. Staged input lives under
+private CGW state, is integrity-checked before upload, and expires automatically.
+
+Supported binary inputs are currently PDF, DOCX, PPTX, XLSX/XLS, PNG, JPEG, and
+GIF. Text staging covers source code, logs, diffs, Markdown/TXT, CSV/TSV,
+JSON/XML/YAML/TOML/SQL, and other UTF-8 text.
+
+Credential-like filenames/content, archives, executables, and unknown binary
+are rejected. See [docs/input-attachments.md](docs/input-attachments.md).
+
 ## Structured responses
 
 Completed/in-progress turn results may include a `manifest` that preserves
@@ -258,6 +284,7 @@ methods for the first login, then remove the display service.
 | `CGW_BROWSER_CHANNEL` | bundled Chromium | Optional Playwright browser channel such as `chrome` |
 | `CGW_TIMEOUT_MS` | `180000` | Default ChatGPT generation timeout |
 | `CGW_STABLE_MS` | `5000` | Fallback text-stability interval used when no Copy control is detectable |
+| `CGW_INPUT_TTL_HOURS` | `24` | Local private input-staging TTL (1-168 hours) |
 
 Response asset retrieval is capped at 25 MiB per asset.
 
