@@ -4,6 +4,7 @@ import path from "node:path";
 
 export const CHATGPT_ORIGIN = "https://chatgpt.com";
 export const DEFAULT_TIMEOUT_MS = 180_000;
+export const DEFAULT_STABLE_MS = 5_000;
 export const MAX_PROMPT_BYTES = 512 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
 
@@ -13,6 +14,7 @@ export interface AppConfig {
   headless: boolean;
   browserChannel: string | undefined;
   timeoutMs: number;
+  stableMs: number;
   maxPromptBytes: number;
   maxResponseBytes: number;
 }
@@ -81,6 +83,7 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
     headless: overrides.headless ?? boolEnv(process.env.CGW_HEADLESS, true),
     browserChannel: channel || undefined,
     timeoutMs: intEnv(process.env.CGW_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 10_000, 600_000),
+    stableMs: intEnv(process.env.CGW_STABLE_MS, DEFAULT_STABLE_MS, 1_000, 30_000),
     maxPromptBytes: MAX_PROMPT_BYTES,
     maxResponseBytes: MAX_RESPONSE_BYTES,
   };
