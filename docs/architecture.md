@@ -48,7 +48,8 @@ The server is responsible only for:
 - persistent local turn metadata
 - bounded generation polling and timeout recovery
 - stronger generation completion detection
-- response extraction
+- structured response extraction (text/code/writing/table/citation/file/image/preview)
+- private staged asset retrieval
 
 ### ChatGPT Web
 
@@ -121,6 +122,31 @@ It reads the live web UI and uses:
 
 If the requested model/effort cannot be identified exactly, the request fails
 rather than silently choosing another option.
+
+## Response extraction
+
+The adapter does not treat an assistant message as one opaque string. The DOM
+extractor emits a response manifest while retaining plain text compatibility.
+
+```text
+assistant message DOM
+      │
+      ├─ text
+      ├─ code(language, exact text)
+      ├─ writing block
+      ├─ table
+      ├─ citation
+      ├─ file ──────▶ opaque asset_id
+      ├─ image ─────▶ opaque asset_id
+      └─ preview
+```
+
+Asset URLs remain inside the browser adapter. An explicit retrieval request
+stages bytes under the private application state directory and returns only the
+local staging path plus integrity metadata.
+
+The browser UI itself is normalized into an explicit state machine; see
+[web-ui-state.md](web-ui-state.md).
 
 ## No workspace bridge
 

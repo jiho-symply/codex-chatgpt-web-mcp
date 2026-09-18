@@ -67,6 +67,7 @@ Codex가 검증/적용/테스트
 - 한 browser profile에서 요청을 직렬화하여 대화 race를 막습니다.
 - request id를 browser 전송 전에 저장해 재시도에 따른 중복 prompt를 막습니다.
 - 긴 응답은 하나의 긴 MCP call에 묶지 않고 turn 상태로 복구할 수 있습니다.
+- 생성 파일/이미지는 명시적 요청 전에는 다운로드하지 않고 private staging에만 저장합니다.
 - ChatGPT 응답은 항상 **untrusted text**로 취급합니다.
 - 이 MCP는 patch를 적용하거나 shell/git을 실행할 수 없습니다.
 
@@ -94,6 +95,12 @@ Codex가 검증/적용/테스트
 - `chatgpt_get_reply`: 새 메시지 없이 현재 응답 상태 확인
 - `chatgpt_stop`: 해당 turn만 중지
 
+### `chatgpt_get_asset`
+
+구조화된 응답 manifest에서 이미 식별된 파일/이미지를 명시적으로 가져옵니다.
+결과는 Codex workspace가 아니라 proxy private state의 staging directory에만
+저장됩니다.
+
 ### `chatgpt_chat`
 
 짧은 작업을 위한 호환 wrapper입니다. 전체 timeout이 나더라도 `turnId`를
@@ -103,6 +110,41 @@ Codex가 검증/적용/테스트
 
 Codex는 필요한 코드만 prompt에 포함시키고, 반환된 코드/diff를 로컬에서 검증한
 뒤 적용할 수 있습니다.
+
+## 구조화된 응답 처리
+
+turn 결과에는 단순 `response` 문자열뿐 아니라 `manifest`가 포함될 수 있습니다.
+
+현재 구조적으로 구분하는 항목:
+
+- 일반 text
+- language metadata를 포함한 code block
+- writing/artifact block
+- table
+- citation
+- generated/downloadable file
+- image
+- preview
+
+코드 작업에서는 flattened text를 다시 파싱하기보다 `type: "code"` part를
+우선 사용하는 편이 안전합니다.
+
+파일/이미지는 실제 URL을 MCP에 노출하지 않고 opaque `assetId`로 표시합니다.
+필요할 때만 `chatgpt_get_asset`으로 private staging에 가져오며 filename, MIME,
+size, SHA-256을 함께 반환합니다.
+
+자세한 형식은 [docs/response-manifest.md](docs/response-manifest.md)를 참고하세요.
+
+## Web UI 상태
+
+브라우저 UI는 다음 상태로 정규화합니다.
+
+`ready / generating / paused / auth_required / challenge_required /
+rate_limited / remote_error / unknown`
+
+Retry, Regenerate, Continue generating 버튼은 감지만 하며 자동 클릭하지 않습니다.
+
+자세한 내용은 [docs/web-ui-state.md](docs/web-ui-state.md)를 참고하세요.
 
 ## 설치
 

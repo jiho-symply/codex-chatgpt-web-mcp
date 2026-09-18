@@ -86,3 +86,23 @@ Never retry a send merely because the MCP client timed out. Reuse the same
 `request_id` or, preferably, continue from the known `turn_id`.
 
 See [reliability.md](reliability.md).
+
+
+## Structured response handling
+
+When a turn result contains `manifest`, prefer its structured parts over
+re-parsing the flattened `response` string.
+
+Recommended coding behavior:
+
+1. use `code` parts directly for code/diff content;
+2. treat `writing_block` as document text, not executable code;
+3. convert/use `table` from its structured rows/Markdown representation;
+4. treat citations as metadata only;
+5. retrieve a `file` or `image` only when it is needed, using its
+   `assetId`;
+6. read the returned private staging path locally and independently validate
+   bytes before copying anything into a workspace.
+
+Never assume a generated `.patch` or code file is safe merely because ChatGPT
+created it.

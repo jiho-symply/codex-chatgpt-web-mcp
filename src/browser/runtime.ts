@@ -32,7 +32,7 @@ export class BrowserRuntime {
       const channel = this.config.browserChannel;
       this.context = await chromium.launchPersistentContext(this.config.profileDir, {
         headless: this.config.headless,
-        acceptDownloads: false,
+        acceptDownloads: true,
         viewport: { width: 1440, height: 1000 },
         args: ["--disable-dev-shm-usage"],
         ...(channel ? { channel } : {}),

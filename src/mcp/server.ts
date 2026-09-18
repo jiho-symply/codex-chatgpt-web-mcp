@@ -9,6 +9,7 @@ import {
   type ChatGptCapabilities,
 } from "../browser/chatgpt.js";
 import { TurnManager, type TurnView } from "../turns/manager.js";
+import { AssetStoreError } from "../assets/store.js";
 import { TurnStore, TurnStoreError } from "../turns/store.js";
 import { SerialQueue } from "../util/serial.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
@@ -43,6 +44,7 @@ function mapError(error: unknown): ToolResult {
   if (error instanceof ChatGptWebError) return fail(error.code, error.message);
   if (error instanceof BrowserRuntimeError) return fail(error.code, error.message);
   if (error instanceof TurnStoreError) return fail(error.code, error.message);
+  if (error instanceof AssetStoreError) return fail(error.code, error.message);
   return fail("INTERNAL_ERROR", error instanceof Error ? error.message : String(error));
 }
 
@@ -50,6 +52,83 @@ const pickerSchema = z.object({
   found: z.boolean(),
   current: z.string().nullable(),
   options: z.array(z.string()),
+});
+
+const uiSchema = z.object({
+  state: z.enum([
+    "ready",
+    "generating",
+    "paused",
+    "auth_required",
+    "challenge_required",
+    "rate_limited",
+    "remote_error",
+    "unknown",
+  ]),
+  message: z.string().nullable(),
+  actions: z.object({
+    stop: z.boolean(),
+    continue: z.boolean(),
+    retry: z.boolean(),
+    regenerate: z.boolean(),
+  }),
+});
+
+const responsePartSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({
+    type: z.literal("code"),
+    language: z.string().nullable(),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal("writing_block"),
+    title: z.string().nullable(),
+    text: z.string(),
+    editable: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("table"),
+    headers: z.array(z.string()),
+    rows: z.array(z.array(z.string())),
+    markdown: z.string(),
+  }),
+  z.object({
+    type: z.literal("citation"),
+    label: z.string().nullable(),
+    title: z.string().nullable(),
+    url: z.string().nullable(),
+  }),
+  z.object({
+    type: z.literal("file"),
+    assetId: z.string(),
+    filename: z.string().nullable(),
+    mime: z.string().nullable(),
+    downloadable: z.literal(true),
+  }),
+  z.object({
+    type: z.literal("image"),
+    assetId: z.string(),
+    alt: z.string().nullable(),
+    width: z.number().int().nullable(),
+    height: z.number().int().nullable(),
+  }),
+  z.object({
+    type: z.literal("preview"),
+    kind: z.string().nullable(),
+    title: z.string().nullable(),
+    text: z.string().nullable(),
+  }),
+]);
+
+const manifestSchema = z.object({
+  version: z.literal(1),
+  plainText: z.string(),
+  parts: z.array(responsePartSchema),
+  assistantIndex: z.number().int().nonnegative(),
+  structured: z.boolean(),
+  assetCount: z.number().int().nonnegative(),
+  codeBlockCount: z.number().int().nonnegative(),
 });
 
 const turnStatusSchema = z.enum([
@@ -72,6 +151,8 @@ const turnViewSchema = {
   paused: z.boolean().optional(),
   timedOut: z.boolean().optional(),
   lastErrorCode: z.string().nullable().optional(),
+  manifest: manifestSchema.nullable().optional(),
+  ui: uiSchema.optional(),
   requestedModel: z.string().nullable(),
   requestedEffort: z.string().nullable(),
 };
@@ -93,6 +174,7 @@ function completedChatPayload(turn: TurnView): Record<string, unknown> | null {
     response: turn.response,
     responseBytes: turn.responseBytes ?? Buffer.byteLength(turn.response, "utf8"),
     truncated: turn.truncated ?? false,
+    manifest: turn.manifest ?? null,
     requestedModel: turn.requestedModel,
     requestedEffort: turn.requestedEffort,
   };
@@ -129,6 +211,7 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
         uiReady: z.boolean(),
         conversationId: z.string().nullable(),
         headless: z.boolean(),
+        ui: uiSchema,
       },
       annotations: { readOnlyHint: true },
     },
@@ -249,6 +332,37 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
   );
 
   server.registerTool(
+    "chatgpt_get_asset",
+    {
+      title: "Retrieve ChatGPT response asset",
+      description:
+        "Retrieve a file/image asset previously observed in a structured response manifest. " +
+        "The asset is written only to the proxy's private staging directory, never to the workspace. " +
+        "Only known ChatGPT/OpenAI asset origins or page-local data/blob URLs are accepted.",
+      inputSchema: {
+        asset_id: z.string().regex(/^asset_[a-f0-9]{24}$/),
+      },
+      outputSchema: {
+        assetId: z.string(),
+        kind: z.enum(["file", "image"]),
+        filename: z.string(),
+        mime: z.string().nullable(),
+        sizeBytes: z.number().int().nonnegative(),
+        sha256: z.string(),
+        stagingPath: z.string(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args) => {
+      try {
+        return ok(await queue.run(() => client.getAsset(args.asset_id)));
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
     "chatgpt_stop",
     {
       title: "Stop ChatGPT Web generation",
@@ -292,6 +406,7 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
         response: z.string(),
         responseBytes: z.number().int().nonnegative(),
         truncated: z.boolean(),
+        manifest: manifestSchema.nullable(),
         requestedModel: z.string().nullable(),
         requestedEffort: z.string().nullable(),
       },

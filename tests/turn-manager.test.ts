@@ -41,6 +41,12 @@ class FakeBackend implements ChatTurnBackend {
         response: null,
         responseBytes: 0,
         truncated: false,
+        manifest: null,
+        ui: {
+          state: "generating" as const,
+          message: null,
+          actions: { stop: true, continue: false, retry: false, regenerate: false },
+        },
       }
     );
   }
@@ -54,6 +60,12 @@ class FakeBackend implements ChatTurnBackend {
       response: "partial",
       responseBytes: 7,
       truncated: false,
+      manifest: null,
+      ui: {
+        state: "ready",
+        message: null,
+        actions: { stop: false, continue: false, retry: false, regenerate: true },
+      },
     };
   }
 }
@@ -87,6 +99,20 @@ describe("TurnManager", () => {
       response: "done",
       responseBytes: 4,
       truncated: false,
+      manifest: {
+        version: 1,
+        plainText: "done",
+        parts: [{ type: "code", language: "diff", text: "diff --git a/a b/a" }],
+        assistantIndex: 2,
+        structured: true,
+        assetCount: 0,
+        codeBlockCount: 1,
+      },
+      ui: {
+        state: "ready",
+        message: null,
+        actions: { stop: false, continue: false, retry: false, regenerate: true },
+      },
     });
     const manager = new TurnManager(backend, new TurnStore(tmp()));
     const sent = await manager.send({
@@ -97,6 +123,8 @@ describe("TurnManager", () => {
     const finished = await manager.wait(sent.turnId, 30_000);
     expect(finished.status).toBe("completed");
     expect(finished.response).toBe("done");
+    expect(finished.manifest?.codeBlockCount).toBe(1);
+    expect(finished.manifest?.parts[0]).toMatchObject({ type: "code", language: "diff" });
   });
 
   it("does not redispatch an ambiguous reserved request after restart", async () => {
