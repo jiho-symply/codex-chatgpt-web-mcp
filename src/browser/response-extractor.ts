@@ -106,6 +106,7 @@ function cleanMultiline(value: string): string {
 export async function extractResponseManifest(input: {
   message: Locator;
   conversationId: string;
+  projectId?: string | null;
   assistantIndex: number;
   assetStore: AssetStore;
 }): Promise<ResponseManifest> {
@@ -395,6 +396,7 @@ export async function extractResponseManifest(input: {
     if (part.type === "file") {
       const record = input.assetStore.register({
         conversationId: input.conversationId,
+        projectId: input.projectId ?? null,
         assistantIndex: input.assistantIndex,
         kind: "file",
         ordinal: part.ordinal,
@@ -412,6 +414,7 @@ export async function extractResponseManifest(input: {
     if (part.type === "image") {
       const record = input.assetStore.register({
         conversationId: input.conversationId,
+        projectId: input.projectId ?? null,
         assistantIndex: input.assistantIndex,
         kind: "image",
         ordinal: part.ordinal,
