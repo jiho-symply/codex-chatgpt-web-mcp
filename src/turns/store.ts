@@ -92,6 +92,7 @@ export function payloadHash(input: {
   conversationId?: string;
   model?: string;
   effort?: string;
+  inputAssetIds?: string[];
 }): string {
   return createHash("sha256")
     .update(
@@ -100,6 +101,7 @@ export function payloadHash(input: {
         conversationId: input.conversationId ?? null,
         model: input.model ?? null,
         effort: input.effort ?? null,
+        inputAssetIds: input.inputAssetIds ?? [],
       })
     )
     .digest("hex");
@@ -140,7 +142,7 @@ export class TurnStore {
       if (existing.payloadHash !== input.payloadHash) {
         throw new TurnStoreError(
           "REQUEST_ID_CONFLICT",
-          "request_id was already used with different prompt/model/conversation inputs."
+          "request_id was already used with different prompt/model/conversation/attachment inputs."
         );
       }
       return { record: existing, deduplicated: true };
