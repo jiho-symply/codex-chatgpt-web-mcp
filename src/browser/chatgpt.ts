@@ -696,6 +696,9 @@ export class ChatGptWebClient {
         "Composer is not inside the ChatGPT Project bound to this workspace."
       );
     }
+    if (input.workspaceId) {
+      await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
+    }
 
     const composer = await this.requireComposer(page);
     const preSendUi = await detectChatGptUiState(page);
