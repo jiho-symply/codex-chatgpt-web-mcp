@@ -216,6 +216,7 @@ methods for the first login, then remove the display service.
 | `CGW_HEADLESS` | `true` for MCP/doctor | Run browser without a visible window |
 | `CGW_BROWSER_CHANNEL` | bundled Chromium | Optional Playwright browser channel such as `chrome` |
 | `CGW_TIMEOUT_MS` | `180000` | Default ChatGPT generation timeout |
+| `CGW_STABLE_MS` | `5000` | Fallback text-stability interval used when no Copy control is detectable |
 
 There is intentionally no configurable remote origin.
 
