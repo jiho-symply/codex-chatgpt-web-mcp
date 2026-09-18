@@ -1,0 +1,71 @@
+name: Publish npm package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Verify release tag
+        id: release
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED="v${VERSION}"
+          if [[ "${GITHUB_REF_NAME}" != "${EXPECTED}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${VERSION}." >&2
+            exit 1
+          fi
+
+          if [[ "${VERSION}" == *-* ]]; then
+            NPM_TAG="next"
+          else
+            NPM_TAG="latest"
+          fi
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "npm_tag=${NPM_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Inspect package contents
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        run: npm publish --access public --tag "${{ steps.release.outputs.npm_tag }}"
+
+      - name: Verify registry install
+        shell: bash
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          for attempt in 1 2 3 4 5 6; do
+            OUTPUT="$(npx -y "codex-chatgpt-web-mcp@${VERSION}" --version 2>/dev/null || true)"
+            if [[ "${OUTPUT}" == "${VERSION}" ]]; then
+              echo "Verified codex-chatgpt-web-mcp@${VERSION}"
+              exit 0
+            fi
+            echo "Registry package not visible yet (attempt ${attempt}/6); waiting..."
+            sleep 10
+          done
+          echo "Published package could not be verified through npx." >&2
+          exit 1
