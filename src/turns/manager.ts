@@ -33,6 +33,7 @@ export interface SendTurnInput {
   conversationId?: string;
   model?: string;
   effort?: string;
+  inputAssetIds?: string[];
 }
 
 export interface TurnView {
@@ -92,6 +93,7 @@ export class TurnManager {
         ...(input.conversationId ? { conversationId: input.conversationId } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.effort ? { effort: input.effort } : {}),
+        ...(input.inputAssetIds ? { inputAssetIds: input.inputAssetIds } : {}),
       });
       const record = this.store.update(reserved.record.turnId, {
         conversationId: dispatched.conversationId,
