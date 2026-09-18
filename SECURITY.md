@@ -49,6 +49,10 @@ The persistent browser profile contains authentication state and is sensitive.
 | ChatGPT gains workspace access | Impossible through this MCP surface: there is no workspace tool or mount |
 | ChatGPT runs local commands | No shell/process execution tool is exposed |
 | Malicious model-generated patch | Returned as text only; proxy cannot apply it |
+| Arbitrary local-file exfiltration | Input tools never accept filesystem paths; only caller-provided text/base64 bytes can enter private staging |
+| Secret/credential attachment | Sensitive filenames, obvious private-key/token material, archives/executables and unknown binary are rejected before staging |
+| Staged-input tampering | SHA-256, size, regular-file and symlink checks run again immediately before browser upload |
+| Stale staged input | Private input staging expires automatically by TTL; expiry is local only and does not imply remote ChatGPT deletion |
 | Cookie/token exfiltration through MCP | No cookie/storage/profile read tools exist |
 | Remote MCP exposure | MCP transport is stdio only; no TCP listener |
 | Arbitrary browser navigation | Navigation is fixed to `https://chatgpt.com` and validated conversation URLs |
@@ -74,6 +78,21 @@ response bodies.
 
 Turn-state files use owner-only permissions where supported and reject
 symlinked state files.
+
+## Explicit input staging
+
+The proxy has no local path/directory/repository upload API.
+
+Codex must explicitly provide text or base64 bytes to the staging tools. Staged
+input files live under private application state, use owner-only permissions
+where supported, are size/integrity checked, and expire automatically.
+
+The sensitive-input detector is a guardrail, not a complete DLP system. The
+caller remains responsible for minimizing source/data sent to ChatGPT.
+
+Once `input_asset_ids` are passed to `chatgpt_send`/`chatgpt_chat`, those
+bytes are uploaded to ChatGPT Web. Local staging deletion or TTL cleanup does
+not delete already-uploaded content from the ChatGPT account/service.
 
 ## Structured response extraction
 
