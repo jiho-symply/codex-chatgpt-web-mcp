@@ -243,10 +243,16 @@ export class ChatGptWebClient {
           "ChatGPT conversation was not found: " + conversationId
         );
       }
+      await page.waitForTimeout(300);
       await throwPageProblem(page);
       const actual = extractConversationId(page.url());
-      if (actual && actual !== conversationId) {
-        throw new ChatGptWebError("SESSION_LOST", "ChatGPT opened a different conversation than requested.");
+      if (actual !== conversationId) {
+        throw new ChatGptWebError(
+          actual ? "SESSION_LOST" : "CONVERSATION_NOT_FOUND",
+          actual
+            ? "ChatGPT opened a different conversation than requested."
+            : "ChatGPT did not remain on the requested conversation."
+        );
       }
       return;
     }
@@ -260,8 +266,19 @@ export class ChatGptWebClient {
 
   private async ensureConversation(page: Page, conversationId: string | null): Promise<void> {
     if (!conversationId) {
-      const current = extractConversationId(page.url());
-      if (!current) await throwPageProblem(page);
+      const deadline = Date.now() + 5_000;
+      let current = extractConversationId(page.url());
+      while (!current && Date.now() < deadline) {
+        await throwPageProblem(page);
+        await page.waitForTimeout(250);
+        current = extractConversationId(page.url());
+      }
+      if (!current) {
+        throw new ChatGptWebError(
+          "SESSION_LOST",
+          "This turn has no recoverable ChatGPT conversation id. Refusing to guess from another page."
+        );
+      }
       return;
     }
     if (extractConversationId(page.url()) === conversationId) return;
@@ -388,7 +405,7 @@ export class ChatGptWebClient {
         stableSince = Date.now();
       }
 
-      const stableLongEnough = Boolean(response) && Date.now() - stableSince >= 2_500;
+      const stableLongEnough = Boolean(response) && Date.now() - stableSince >= this.config.stableMs;
       const complete =
         Boolean(response) && !stopVisible && !paused && (copyVisible || stableLongEnough);
 
