@@ -63,6 +63,10 @@ origin.
 - **Serialized requests** — one browser profile is used by one request at a
   time to prevent cross-conversation races.
 - **Bounded I/O** — prompt and response sizes are capped locally.
+- **At-most-once sends** — request ids are persisted before browser dispatch so
+  retries cannot duplicate prompts after transport/browser failures.
+- **Recoverable long turns** — turn metadata is stored outside the workspace;
+  bounded wait slices and reply recovery do not depend on one long MCP call.
 
 See [SECURITY.md](SECURITY.md) for the threat model.
 
@@ -78,19 +82,27 @@ ChatGPT composer is usable.
 Reads the live model/effort picker choices visible to the signed-in account.
 The web UI is the source of truth; model names are not hard-coded.
 
+### `chatgpt_send` / `chatgpt_wait` / `chatgpt_get_reply` / `chatgpt_stop`
+
+These are the preferred tools for long or high-reasoning work.
+
+`chatgpt_send` returns quickly with a local `turn_id`. A caller-provided
+`request_id` is an idempotency key: retrying the same request never sends the
+prompt twice.
+
+`chatgpt_wait` waits in bounded slices (default 30 seconds) and returns
+`status=generating` if ChatGPT is still working. `chatgpt_get_reply` inspects
+the current reply without sending anything. `chatgpt_stop` stops only the
+known turn.
+
 ### `chatgpt_chat`
 
-Sends a prompt to a new or existing ChatGPT conversation.
+Compatibility wrapper for send + wait. It is convenient for short turns, but
+long work should use the asynchronous tools. If its overall timeout expires,
+the error includes `turnId` so the same answer can be recovered instead of
+re-sending the prompt.
 
-Inputs include:
-
-- `prompt`
-- optional `conversation_id`
-- optional exact `model` label
-- optional exact `effort` label
-- optional timeout
-
-The returned `conversation_id` can be reused on the next call.
+See [docs/reliability.md](docs/reliability.md).
 
 ## Quick start
 
@@ -146,8 +158,8 @@ startup_timeout_sec = 30
 tool_timeout_sec = 600
 ```
 
-Then Codex can call `chatgpt_chat` as a subagent without giving ChatGPT direct
-workspace access.
+Then Codex can use the asynchronous turn tools as a subagent interface without
+giving ChatGPT direct workspace access.
 
 See [docs/codex.md](docs/codex.md).
 
@@ -158,11 +170,12 @@ Codex remains the orchestrator:
 ```text
 1. Codex searches/reads the repository.
 2. Codex selects only the relevant context.
-3. Codex calls chatgpt_chat with the task + selected context.
-4. ChatGPT returns analysis, code, or a unified diff as ordinary text.
-5. Codex treats the response as untrusted.
-6. Codex validates any patch locally, runs tests, and decides what to apply.
-7. Codex may send the resulting diff/test summary back for review.
+3. Codex calls `chatgpt_send` with a stable request id.
+4. Codex polls with `chatgpt_wait` while doing other local work.
+5. ChatGPT returns analysis, code, or a unified diff as ordinary text.
+6. Codex treats the response as untrusted.
+7. Codex validates any patch locally, runs tests, and decides what to apply.
+8. Codex may reuse the conversation and send the resulting diff/test summary for review.
 ```
 
 ChatGPT does not need to know that Codex is the caller.
