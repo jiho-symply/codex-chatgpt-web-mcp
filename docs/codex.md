@@ -9,13 +9,13 @@ Normal users do not need to clone or build CGW.
 ### 1. Sign in to ChatGPT once
 
 ```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp login
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
 ```
 
 ### 2. Register the MCP server
 
 ```bash
-codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
 ```
 
 This Codex MCP configuration is shared by Codex CLI, the Codex/ChatGPT desktop
@@ -37,7 +37,7 @@ or from the Codex terminal UI:
 For UI-only setup, add a local **STDIO** MCP server named `chatgpt-web` with:
 
 ```text
-npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
 ```
 
 On Windows, use `npx.cmd` if the UI cannot resolve `npx`.
