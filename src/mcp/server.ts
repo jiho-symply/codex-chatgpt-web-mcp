@@ -148,7 +148,7 @@ const workspaceProjectSchema = z.object({
   projectUrl: z.string(),
   memoryMode: z.literal("project-only"),
   memoryVerifiedAt: z.string().nullable(),
-  memoryVerificationSource: z.enum(["creation", "settings"]).nullable(),
+  memoryVerificationSource: z.literal("creation").nullable(),
   status: z.enum(["ready", "memory_unverified"]),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -325,74 +325,6 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
   );
 
   server.registerTool(
-    "chatgpt_get_workspace_project",
-    {
-      title: "Get local workspace Project binding",
-      description:
-        "Read the exact local mapping from an opaque workspace_id to its ChatGPT Project. " +
-        "This does not search or adopt projects by visible name.",
-      inputSchema: {
-        workspace_id: z.string().regex(/^ws_[A-Fa-f0-9]{12,64}$/),
-      },
-      outputSchema: workspaceProjectSchema.shape,
-      annotations: { readOnlyHint: true },
-    },
-    async (args) => {
-      try {
-        return ok(client.getWorkspaceProject(args.workspace_id));
-      } catch (error) {
-        return mapError(error);
-      }
-    }
-  );
-
-  server.registerTool(
-    "chatgpt_list_workspace_projects",
-    {
-      title: "List local workspace Project bindings",
-      description:
-        "List only CGW's local workspace-to-Project mappings. This does not enumerate unrelated ChatGPT Projects.",
-      inputSchema: {},
-      outputSchema: {
-        bindings: z.array(workspaceProjectSchema),
-      },
-      annotations: { readOnlyHint: true },
-    },
-    async () => {
-      try {
-        return ok({ bindings: client.listWorkspaceProjects() });
-      } catch (error) {
-        return mapError(error);
-      }
-    }
-  );
-
-  server.registerTool(
-    "chatgpt_unbind_workspace",
-    {
-      title: "Unbind local workspace Project mapping",
-      description:
-        "Delete only CGW's local workspace-to-Project mapping. The remote ChatGPT Project is intentionally NOT deleted.",
-      inputSchema: {
-        workspace_id: z.string().regex(/^ws_[A-Fa-f0-9]{12,64}$/),
-      },
-      outputSchema: {
-        workspaceId: z.string(),
-        unbound: z.boolean(),
-        remoteProjectDeleted: z.literal(false),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true },
-    },
-    async (args) => {
-      try {
-        return ok(client.unbindWorkspaceProject(args.workspace_id));
-      } catch (error) {
-        return mapError(error);
-      }
-    }
-  );
-
-  server.registerTool(
     "chatgpt_stage_text",
     {
       title: "Stage explicit text input for ChatGPT",
@@ -428,13 +360,13 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
     {
       title: "Stage explicit binary input for ChatGPT",
       description:
-        "Store caller-provided base64 bytes in private input staging. Best for small binary inputs; use create/commit blob slot for large files. No arbitrary filesystem path is accepted. " +
+        "Store a small caller-provided binary (up to 1 MiB) from base64 in private input staging. Use create/commit blob slot for larger files. No arbitrary filesystem path is accepted. " +
         "Only supported PDF/Office/image types are allowed; archives, executables, unknown binary, and credential-like filenames are rejected. " +
         "Nothing is uploaded until a later chatgpt_send/chatgpt_chat references the returned input_asset_id.",
       inputSchema: {
         filename: z.string().min(1).max(180),
         mime: z.string().min(1).max(120),
-        data_base64: z.string().min(4).max(30_000_000),
+        data_base64: z.string().min(4).max(1_500_000),
       },
       outputSchema: inputAssetSchema.shape,
       annotations: { readOnlyHint: false, destructiveHint: false },
@@ -459,21 +391,17 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
     {
       title: "Create a one-time private binary input slot",
       description:
-        "Create a short-lived empty file inside CGW private input staging for a large supported binary. " +
-        "The caller supplies filename, MIME, expected size, and SHA-256. The returned writePath is the only path CGW asks Codex to write. " +
-        "CGW does not read a caller-selected workspace path.",
+        "Create a short-lived empty file inside CGW private input staging for a supported binary. " +
+        "The caller supplies only filename and MIME, writes bytes to the returned private writePath, then commits the slot. " +
+        "CGW validates size/type and computes SHA-256 at commit time; it never reads a caller-selected workspace path.",
       inputSchema: {
         filename: z.string().min(1).max(180),
         mime: z.string().min(1).max(120),
-        size_bytes: z.number().int().min(1),
-        sha256: z.string().regex(/^[A-Fa-f0-9]{64}$/),
       },
       outputSchema: {
         slotId: z.string(),
         filename: z.string(),
         mime: z.string(),
-        expectedSizeBytes: z.number().int().positive(),
-        expectedSha256: z.string(),
         writePath: z.string(),
         expiresAt: z.string(),
       },
@@ -485,8 +413,6 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
           client.createBlobInputSlot({
             filename: args.filename,
             mime: args.mime,
-            sizeBytes: args.size_bytes,
-            sha256: args.sha256,
           })
         );
       } catch (error) {
@@ -511,53 +437,6 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
     async (args) => {
       try {
         return ok(client.commitBlobInputSlot(args.slot_id));
-      } catch (error) {
-        return mapError(error);
-      }
-    }
-  );
-
-  server.registerTool(
-    "chatgpt_list_staged_inputs",
-    {
-      title: "List private staged ChatGPT inputs",
-      description:
-        "List active caller-provided inputs in the proxy's private staging area. " +
-        "Expired inputs are cleaned automatically. No workspace files are discovered or listed.",
-      inputSchema: {},
-      outputSchema: {
-        inputs: z.array(inputAssetSchema),
-      },
-      annotations: { readOnlyHint: true },
-    },
-    async () => {
-      try {
-        return ok({ inputs: client.listStagedInputs() });
-      } catch (error) {
-        return mapError(error);
-      }
-    }
-  );
-
-  server.registerTool(
-    "chatgpt_discard_staged_input",
-    {
-      title: "Discard a private staged ChatGPT input",
-      description:
-        "Delete one previously staged input from the proxy's private state. " +
-        "This does not delete anything from a workspace or from ChatGPT after it has already been uploaded.",
-      inputSchema: {
-        input_asset_id: z.string().regex(/^input_[a-f0-9]{24}$/),
-      },
-      outputSchema: {
-        inputAssetId: z.string(),
-        discarded: z.boolean(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true },
-    },
-    async (args) => {
-      try {
-        return ok(client.discardStagedInput(args.input_asset_id));
       } catch (error) {
         return mapError(error);
       }

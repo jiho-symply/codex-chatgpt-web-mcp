@@ -57,6 +57,11 @@ export class BrowserRuntime {
     }
   }
 
+  async newPage(): Promise<Page> {
+    const context = await this.start();
+    return context.newPage();
+  }
+
   async page(): Promise<Page> {
     const context = await this.start();
     const pages = context.pages();

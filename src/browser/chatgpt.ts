@@ -390,35 +390,43 @@ export class ChatGptWebClient {
     headless: boolean;
     ui: ChatGptUiSnapshot;
   }> {
-    const page = await this.runtime.page();
-    await page.goto(CHATGPT_ORIGIN, {
-      waitUntil: "domcontentloaded",
-      timeout: 30_000,
-    });
-    const ui = await detectChatGptUiState(page);
-    const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 2_000);
-    const authenticated = !["auth_required", "challenge_required"].includes(ui.state);
-    return {
-      authenticated,
-      uiReady: Boolean(composer) && ["ready", "generating", "paused"].includes(ui.state),
-      conversationId: extractConversationId(page.url()),
-      projectId: extractProjectId(page.url()),
-      headless: this.runtime.headless,
-      ui,
-    };
+    const page = await this.runtime.newPage();
+    try {
+      await page.goto(CHATGPT_ORIGIN, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+      const ui = await detectChatGptUiState(page);
+      const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 2_000);
+      const authenticated = !["auth_required", "challenge_required"].includes(ui.state);
+      return {
+        authenticated,
+        uiReady: Boolean(composer) && ["ready", "generating", "paused"].includes(ui.state),
+        conversationId: extractConversationId(page.url()),
+        projectId: extractProjectId(page.url()),
+        headless: this.runtime.headless,
+        ui,
+      };
+    } finally {
+      await page.close().catch(() => undefined);
+    }
   }
 
   async capabilities(): Promise<ChatGptCapabilities> {
-    const page = await this.runtime.page();
-    await this.navigate(page);
-    await this.requireComposer(page);
-    const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
-    const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
-    return {
-      modelPicker,
-      effortPicker,
-      flattenedPicker: modelPicker.found && !effortPicker.found,
-    };
+    const page = await this.runtime.newPage();
+    try {
+      await this.navigate(page);
+      await this.requireComposer(page);
+      const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
+      const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
+      return {
+        modelPicker,
+        effortPicker,
+        flattenedPicker: modelPicker.found && !effortPicker.found,
+      };
+    } finally {
+      await page.close().catch(() => undefined);
+    }
   }
 
   async bindWorkspaceProject(input: {
@@ -460,8 +468,6 @@ export class ChatGptWebClient {
   createBlobInputSlot(input: {
     filename: string;
     mime: string;
-    sizeBytes: number;
-    sha256: string;
   }) {
     return this.inputStore.createBlobSlot(input);
   }
@@ -670,11 +676,14 @@ export class ChatGptWebClient {
     let page: Page;
     let expectedProjectId: string | null = null;
     if (input.workspaceId) {
-      const verified = await this.projectManager.verifyProjectOnlyMemory(input.workspaceId);
-      expectedProjectId = verified.binding.projectId;
-      page = verified.page;
+      const binding = this.projectManager.getBinding(input.workspaceId);
+      expectedProjectId = binding.projectId;
       if (input.conversationId) {
+        page = await this.runtime.page();
         await this.navigate(page, input.conversationId, expectedProjectId);
+      } else {
+        const opened = await this.projectManager.openBoundProject(input.workspaceId);
+        page = opened.page;
       }
     } else {
       page = await this.runtime.page();

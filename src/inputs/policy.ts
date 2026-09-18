@@ -89,14 +89,8 @@ const BINARY_ALLOW: Record<string, { extensions: string[]; kind: InputKind; magi
   "image/gif": { extensions: [".gif"], kind: "image", magic: "gif" },
 };
 
-const SECRET_PATTERNS: { label: string; pattern: RegExp }[] = [
-  { label: "private key", pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/ },
-  { label: "AWS access key", pattern: /\bAKIA[0-9A-Z]{16}\b/ },
-  { label: "GitHub token", pattern: /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,})\b/ },
-  { label: "GitLab token", pattern: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
-  { label: "Slack token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/ },
-  { label: "API secret token", pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{24,}\b/ },
-];
+const PRIVATE_KEY_PATTERN =
+  /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/;
 
 export function validateInputFilename(value: string): string {
   const name = value.trim();
@@ -138,13 +132,11 @@ export function validateTextMime(mime: string | undefined): string {
 }
 
 export function scanSensitiveText(content: string): void {
-  for (const item of SECRET_PATTERNS) {
-    if (item.pattern.test(content)) {
-      throw new InputPolicyError(
-        "SENSITIVE_INPUT_BLOCKED",
-        "Content appears to contain a " + item.label + "; refusing to stage it."
-      );
-    }
+  if (PRIVATE_KEY_PATTERN.test(content)) {
+    throw new InputPolicyError(
+      "SENSITIVE_INPUT_BLOCKED",
+      "Content appears to contain a private key block; refusing to stage it."
+    );
   }
 }
 

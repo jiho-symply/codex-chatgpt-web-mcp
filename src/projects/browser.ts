@@ -8,12 +8,11 @@ import {
   PROMPT_SELECTORS,
 } from "../browser/selectors.js";
 import {
-  ProjectNamingMode,
   WorkspaceProjectStore,
-  WorkspaceProjectStoreError,
   projectNameFor,
   sanitizeWorkspaceName,
   validateWorkspaceId,
+  type ProjectNamingMode,
   type WorkspaceProjectBinding,
 } from "./store.js";
 
@@ -50,13 +49,16 @@ const PROJECT_NAME_INPUT_SELECTORS = [
   'input[name*="project" i]',
 ] as const;
 
+const PROJECT_ONLY_LABEL =
+  /project[- ]only memory|project only|프로젝트 전용 메모리|프로젝트만/i;
 const MORE_OPTIONS_LABEL = /more options|advanced|추가 옵션|고급/i;
-const PROJECT_ONLY_LABEL = /project[- ]only memory|project only|프로젝트 전용 메모리|프로젝트만/i;
-const CREATE_PROJECT_LABEL = /create project|create|프로젝트 만들기|프로젝트 생성|생성/i;
-const PROJECT_SETTINGS_LABEL = /project settings|프로젝트 설정/i;
-const PROJECT_MENU_LABEL = /project.*(?:options|menu|settings)|(?:options|menu|settings).*project|프로젝트.*(?:옵션|메뉴|설정)|(?:옵션|메뉴|설정).*프로젝트/i;
+const CREATE_PROJECT_LABEL =
+  /create project|create|프로젝트 만들기|프로젝트 생성|생성/i;
 
-async function firstVisible(scope: Page | Locator, selectors: readonly string[]): Promise<Locator | null> {
+async function firstVisible(
+  scope: Page | Locator,
+  selectors: readonly string[]
+): Promise<Locator | null> {
   for (const selector of selectors) {
     const locator = scope.locator(selector).first();
     if (await locator.isVisible().catch(() => false)) return locator;
@@ -68,229 +70,131 @@ async function visibleComposer(page: Page): Promise<Locator | null> {
   return firstVisible(page, PROMPT_SELECTORS);
 }
 
-function namedComposerPointsElsewhere(label: string, expectedProjectName: string): boolean {
-  const normalized = label.replace(/\s+/g, " ").trim();
-  if (!normalized) return false;
-  const identifiesProject =
-    /new chat in|chat in|새 채팅|프로젝트/i.test(normalized);
-  return identifiesProject && !normalized.toLocaleLowerCase().includes(
-    expectedProjectName.toLocaleLowerCase()
+async function waitForProjectCreationScope(
+  page: Page,
+  timeoutMs = 5_000
+): Promise<Locator> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const dialog = page.getByRole("dialog").last();
+    if (await dialog.isVisible().catch(() => false)) return dialog;
+
+    const nameInput = await firstVisible(page, PROJECT_NAME_INPUT_SELECTORS);
+    if (nameInput) {
+      for (const xpath of [
+        "xpath=ancestor::form[1]",
+        "xpath=ancestor::*[@role='dialog'][1]",
+        "xpath=ancestor::*[@data-radix-popper-content-wrapper][1]",
+      ]) {
+        const scope = nameInput.locator(xpath);
+        if ((await scope.count().catch(() => 0)) > 0) return scope.first();
+      }
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new WorkspaceProjectError(
+    "PROJECT_CREATE_FAILED",
+    "New Project UI did not expose a scoped creation surface."
   );
 }
 
-async function projectDialog(page: Page): Promise<Locator> {
-  const dialog = page.getByRole("dialog").last();
-  if (await dialog.isVisible().catch(() => false)) return dialog;
-  return page.locator("body");
+async function visibleProjectOnly(scope: Locator): Promise<Locator | null> {
+  for (const role of ["radio", "option", "menuitem"] as const) {
+    const item = scope.getByRole(role, { name: PROJECT_ONLY_LABEL }).first();
+    if (await item.isVisible().catch(() => false)) return item;
+  }
+  const text = scope.getByText(PROJECT_ONLY_LABEL).first();
+  return (await text.isVisible().catch(() => false)) ? text : null;
 }
 
-async function visibleProjectOnly(scope: Locator): Promise<Locator | null> {
-  const radio = scope.getByRole("radio", { name: PROJECT_ONLY_LABEL }).first();
-  if (await radio.isVisible().catch(() => false)) return radio;
-
-  const option = scope.getByRole("option", { name: PROJECT_ONLY_LABEL }).first();
-  if (await option.isVisible().catch(() => false)) return option;
-
-  const button = scope.getByRole("button", { name: PROJECT_ONLY_LABEL }).first();
-  if (await button.isVisible().catch(() => false)) return button;
-
-  const text = scope.getByText(PROJECT_ONLY_LABEL).first();
-  if (await text.isVisible().catch(() => false)) return text;
+async function activeChoiceOverlay(page: Page): Promise<Locator | null> {
+  for (const selector of ['[role="listbox"]:visible', '[role="menu"]:visible']) {
+    const overlay = page.locator(selector).last();
+    if (await overlay.isVisible().catch(() => false)) return overlay;
+  }
   return null;
 }
 
 async function selectionLooksProjectOnly(scope: Locator): Promise<boolean> {
-  const checked = scope.getByRole("radio", { name: PROJECT_ONLY_LABEL }).first();
-  if (await checked.isVisible().catch(() => false)) {
-    if (await checked.isChecked().catch(() => false)) return true;
-    if ((await checked.getAttribute("aria-checked").catch(() => null)) === "true") return true;
+  const radio = scope.getByRole("radio", { name: PROJECT_ONLY_LABEL }).first();
+  if (await radio.isVisible().catch(() => false)) {
+    if (await radio.isChecked().catch(() => false)) return true;
+    if ((await radio.getAttribute("aria-checked").catch(() => null)) === "true") return true;
   }
 
-  const selectedOption = scope.getByRole("option", { name: PROJECT_ONLY_LABEL }).first();
-  if (await selectedOption.isVisible().catch(() => false)) {
-    if ((await selectedOption.getAttribute("aria-selected").catch(() => null)) === "true") return true;
-  }
-
-  const candidates = scope.locator('[aria-checked="true"], [aria-selected="true"], [data-state="checked"], [data-state="active"]');
-  const count = await candidates.count().catch(() => 0);
-  for (let i = 0; i < count; i++) {
-    const text = (await candidates.nth(i).innerText().catch(() => "")).trim();
-    const aria = (await candidates.nth(i).getAttribute("aria-label").catch(() => null)) ?? "";
+  const selected = scope.locator(
+    '[aria-checked="true"], [aria-selected="true"], [data-state="checked"], [data-state="active"]'
+  );
+  const selectedCount = await selected.count().catch(() => 0);
+  for (let i = 0; i < selectedCount; i++) {
+    const item = selected.nth(i);
+    const text = (await item.innerText().catch(() => "")).trim();
+    const aria = (await item.getAttribute("aria-label").catch(() => null)) ?? "";
     if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
   }
 
-  const combos = scope.locator('[role="combobox"]');
-  const comboCount = await combos.count().catch(() => 0);
-  for (let i = 0; i < comboCount; i++) {
-    const combo = combos.nth(i);
-    if (!(await combo.isVisible().catch(() => false))) continue;
-    const text = (await combo.innerText().catch(() => "")).trim();
-    const aria = (await combo.getAttribute("aria-label").catch(() => null)) ?? "";
-    if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
-  }
-
-  const dropdownTriggers = scope.locator('button[aria-haspopup="listbox"], button[aria-haspopup="menu"]');
-  const triggerCount = await dropdownTriggers.count().catch(() => 0);
-  for (let i = 0; i < triggerCount; i++) {
-    const trigger = dropdownTriggers.nth(i);
-    if (!(await trigger.isVisible().catch(() => false))) continue;
-    const text = (await trigger.innerText().catch(() => "")).trim();
-    const aria = (await trigger.getAttribute("aria-label").catch(() => null)) ?? "";
-    if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
+  for (const selector of ['[role="combobox"]', 'button[aria-haspopup="listbox"]']) {
+    const controls = scope.locator(selector);
+    const count = await controls.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const control = controls.nth(i);
+      if (!(await control.isVisible().catch(() => false))) continue;
+      const text = (await control.innerText().catch(() => "")).trim();
+      const aria = (await control.getAttribute("aria-label").catch(() => null)) ?? "";
+      if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
+    }
   }
   return false;
 }
 
-async function selectProjectOnlyMemory(page: Page, scope: Locator): Promise<void> {
-  let option = await visibleProjectOnly(scope);
+async function selectProjectOnlyMemory(page: Page, dialog: Locator): Promise<void> {
+  let option = await visibleProjectOnly(dialog);
+
   if (!option) {
-    const more = scope.getByRole("button", { name: MORE_OPTIONS_LABEL }).first();
+    const more = dialog.getByRole("button", { name: MORE_OPTIONS_LABEL }).first();
     if (await more.isVisible().catch(() => false)) {
       await more.click();
-      await page.waitForTimeout(200);
-      option = await visibleProjectOnly(scope);
+      await page.waitForTimeout(150);
+      option = await visibleProjectOnly(dialog);
     }
   }
 
   if (!option) {
-    const memoryControl = scope.getByRole("button", { name: /memory|메모리/i }).first();
-    const memoryCombo = scope.getByRole("combobox", { name: /memory|메모리/i }).first();
-    const control = (await memoryControl.isVisible().catch(() => false))
-      ? memoryControl
+    const memoryButton = dialog.getByRole("button", { name: /memory|메모리/i }).first();
+    const memoryCombo = dialog.getByRole("combobox", { name: /memory|메모리/i }).first();
+    const control = (await memoryButton.isVisible().catch(() => false))
+      ? memoryButton
       : (await memoryCombo.isVisible().catch(() => false))
         ? memoryCombo
         : null;
+
     if (control) {
       await control.click();
-      await page.waitForTimeout(200);
-      option = await visibleProjectOnly(await projectDialog(page));
+      await page.waitForTimeout(150);
+      const overlay = await activeChoiceOverlay(page);
+      if (overlay) option = await visibleProjectOnly(overlay);
     }
   }
 
   if (!option) {
     throw new WorkspaceProjectError(
       "PROJECT_MEMORY_UNAVAILABLE",
-      "The new-project UI did not expose Project-only memory. Refusing to create a default-memory project."
+      "The New Project dialog did not expose Project-only memory."
     );
   }
 
   await option.click();
-  await page.waitForTimeout(200);
-  const current = await projectDialog(page);
-  if (!(await selectionLooksProjectOnly(current))) {
-    throw new WorkspaceProjectError(
-      "PROJECT_MEMORY_UNVERIFIED",
-      "Project-only memory could not be verified before project creation."
-    );
-  }
-}
+  await page.waitForTimeout(150);
 
-async function openProjectSettings(
-  page: Page,
-  binding: WorkspaceProjectBinding
-): Promise<Locator> {
-  const direct = page.getByRole("button", { name: PROJECT_SETTINGS_LABEL }).first();
-  if (await direct.isVisible().catch(() => false)) {
-    await direct.click();
-    await page.waitForTimeout(200);
-    const dialog = page.getByRole("dialog").last();
-    if (await dialog.isVisible().catch(() => false)) return dialog;
-  }
-
-  const candidates: Locator[] = [];
-  const semantic = page.locator("button[aria-label]").filter({ hasText: "" });
-  const semanticCount = await semantic.count().catch(() => 0);
-  for (let i = 0; i < semanticCount; i++) {
-    const button = semantic.nth(i);
-    if (!(await button.isVisible().catch(() => false))) continue;
-    const aria = (await button.getAttribute("aria-label").catch(() => null)) ?? "";
-    if (PROJECT_MENU_LABEL.test(aria)) candidates.push(button);
-  }
-
-  const exactNames = page.getByText(binding.projectName, { exact: true });
-  const nameCount = await exactNames.count().catch(() => 0);
-  for (let i = 0; i < nameCount; i++) {
-    const name = exactNames.nth(i);
-    if (!(await name.isVisible().catch(() => false))) continue;
-    const container = name.locator(
-      "xpath=ancestor::*[descendant::button[@aria-haspopup='menu']][1]"
-    );
-    if ((await container.count().catch(() => 0)) > 0) {
-      const button = container.locator("button[aria-haspopup='menu']").first();
-      if (await button.isVisible().catch(() => false)) candidates.push(button);
+  if (!(await selectionLooksProjectOnly(dialog))) {
+    const overlay = await activeChoiceOverlay(page);
+    if (!overlay || !(await selectionLooksProjectOnly(overlay))) {
+      throw new WorkspaceProjectError(
+        "PROJECT_MEMORY_UNVERIFIED",
+        "Project-only memory could not be confirmed before Project creation."
+      );
     }
   }
-
-  for (const button of candidates) {
-    await button.click().catch(() => undefined);
-    await page.waitForTimeout(150);
-
-    const menuItem = page.getByRole("menuitem", { name: PROJECT_SETTINGS_LABEL }).first();
-    const textItem = page.getByText(PROJECT_SETTINGS_LABEL, { exact: true }).last();
-    const target = (await menuItem.isVisible().catch(() => false))
-      ? menuItem
-      : (await textItem.isVisible().catch(() => false))
-        ? textItem
-        : null;
-    if (!target) {
-      await page.keyboard.press("Escape").catch(() => undefined);
-      continue;
-    }
-
-    await target.click();
-    await page.waitForTimeout(200);
-    const dialog = page.getByRole("dialog").last();
-    if (await dialog.isVisible().catch(() => false)) return dialog;
-    await page.keyboard.press("Escape").catch(() => undefined);
-  }
-
-  throw new WorkspaceProjectError(
-    "PROJECT_MEMORY_UNVERIFIED",
-    "Could not open this Project's settings to re-verify Project-only memory."
-  );
-}
-
-async function verifyProjectOnlyInSettings(page: Page, dialog: Locator): Promise<void> {
-  if (await selectionLooksProjectOnly(dialog)) return;
-
-  const memoryButtons = dialog.getByRole("button", { name: /memory|메모리/i });
-  const memoryCombos = dialog.getByRole("combobox", { name: /memory|메모리/i });
-  let control: Locator | null = null;
-
-  const buttonCount = await memoryButtons.count().catch(() => 0);
-  for (let i = 0; i < buttonCount; i++) {
-    const item = memoryButtons.nth(i);
-    if (await item.isVisible().catch(() => false)) {
-      control = item;
-      break;
-    }
-  }
-  if (!control) {
-    const comboCount = await memoryCombos.count().catch(() => 0);
-    for (let i = 0; i < comboCount; i++) {
-      const item = memoryCombos.nth(i);
-      if (await item.isVisible().catch(() => false)) {
-        control = item;
-        break;
-      }
-    }
-  }
-
-  if (control) {
-    await control.click();
-    await page.waitForTimeout(150);
-    const scope = await projectDialog(page);
-    if (await selectionLooksProjectOnly(scope)) {
-      await page.keyboard.press("Escape").catch(() => undefined);
-      return;
-    }
-    await page.keyboard.press("Escape").catch(() => undefined);
-  }
-
-  throw new WorkspaceProjectError(
-    "PROJECT_MEMORY_UNVERIFIED",
-    "Project settings do not currently verify Project-only memory. Refusing to send into this workspace Project."
-  );
 }
 
 function canonicalProjectIdFromHref(href: string | null): string | null {
@@ -302,12 +206,32 @@ function canonicalProjectIdFromHref(href: string | null): string | null {
   }
 }
 
+function explicitComposerProjectName(label: string): string | null {
+  const normalized = label.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+
+  for (const pattern of [
+    /^new chat in\s+(.+)$/i,
+    /^chat in\s+(.+)$/i,
+    /^(.+?)\s*(?:프로젝트에서|에서)\s*새 채팅$/i,
+  ]) {
+    const match = normalized.match(pattern);
+    if (match?.[1]?.trim()) return match[1].trim();
+  }
+  return null;
+}
+
+function sameDisplayName(a: string, b: string): boolean {
+  return a.replace(/\s+/g, " ").trim().toLocaleLowerCase() ===
+    b.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
 export class WorkspaceProjectManager {
   private readonly store: WorkspaceProjectStore;
 
   constructor(
     private readonly runtime: BrowserRuntime,
-    private readonly config: AppConfig
+    config: AppConfig
   ) {
     this.store = new WorkspaceProjectStore(config.stateDir);
   }
@@ -320,18 +244,32 @@ export class WorkspaceProjectManager {
     return this.store.list();
   }
 
-  unbind(workspaceId: string): { workspaceId: string; unbound: boolean; remoteProjectDeleted: false } {
+  unbind(workspaceId: string): {
+    workspaceId: string;
+    unbound: boolean;
+    remoteProjectDeleted: false;
+  } {
     const id = validateWorkspaceId(workspaceId);
-    return { workspaceId: id, unbound: this.store.remove(id), remoteProjectDeleted: false };
+    return {
+      workspaceId: id,
+      unbound: this.store.remove(id),
+      remoteProjectDeleted: false,
+    };
   }
 
   private async rootPage(): Promise<Page> {
     const page = await this.runtime.page();
-    await page.goto(CHATGPT_ORIGIN, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.goto(CHATGPT_ORIGIN, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
     return page;
   }
 
-  private async findSidebarProject(page: Page, binding: WorkspaceProjectBinding): Promise<Locator | null> {
+  private async findSidebarProject(
+    page: Page,
+    binding: WorkspaceProjectBinding
+  ): Promise<Locator | null> {
     const links = page.locator('a[href*="/g/g-p-"]');
     const count = await links.count().catch(() => 0);
     for (let i = 0; i < count; i++) {
@@ -341,17 +279,20 @@ export class WorkspaceProjectManager {
       if (canonicalProjectIdFromHref(href) === binding.projectId) return link;
     }
 
-    const exact = page.getByText(binding.projectName, { exact: true }).first();
-    if (await exact.isVisible().catch(() => false)) {
-      const row = exact.locator("xpath=ancestor::*[self::li or @role='treeitem' or @role='listitem'][1]");
+    // Current UI may render the row as a non-link with a dedicated home button.
+    const exactName = page.getByText(binding.projectName, { exact: true }).first();
+    if (await exactName.isVisible().catch(() => false)) {
+      const row = exactName.locator(
+        "xpath=ancestor::*[self::li or @role='treeitem' or @role='listitem'][1]"
+      );
       if ((await row.count().catch(() => 0)) > 0) {
-        const home = row.locator(
-          'a[href*="/g/g-p-"], button[aria-label*="project home" i], button[aria-label*="프로젝트 홈"]'
-        ).first();
+        const home = row
+          .locator(
+            'a[href*="/g/g-p-"], button[aria-label*="project home" i], button[aria-label*="프로젝트 홈"]'
+          )
+          .first();
         if (await home.isVisible().catch(() => false)) return home;
       }
-      const parentLink = exact.locator('xpath=ancestor::a[contains(@href,"/g/g-p-")][1]');
-      if ((await parentLink.count().catch(() => 0)) > 0) return parentLink.first();
     }
     return null;
   }
@@ -368,12 +309,11 @@ export class WorkspaceProjectManager {
     ) {
       throw new WorkspaceProjectError(
         "PROJECT_MEMORY_UNVERIFIED",
-        "Workspace Project-only memory is not locally verified."
+        "Workspace binding was not created with verified Project-only memory."
       );
     }
 
-    const observedProjectId = extractProjectId(page.url());
-    if (observedProjectId !== binding.projectId) {
+    if (extractProjectId(page.url()) !== binding.projectId) {
       throw new WorkspaceProjectError(
         "PROJECT_DESTINATION_MISMATCH",
         "The active ChatGPT page is not inside the Project bound to this workspace."
@@ -384,49 +324,23 @@ export class WorkspaceProjectManager {
     if (!composer) {
       throw new WorkspaceProjectError(
         "PROJECT_NAVIGATION_FAILED",
-        "The bound ChatGPT Project page does not expose a usable composer."
+        "The bound Project page does not expose a usable composer."
       );
     }
 
     const label =
       (await composer.getAttribute("aria-label").catch(() => null)) ??
       (await composer.getAttribute("data-placeholder").catch(() => null)) ??
-      (await composer.getAttribute("placeholder").catch(() => null)) ??
       "";
-    if (namedComposerPointsElsewhere(label, binding.projectName)) {
+    const explicitName = explicitComposerProjectName(label);
+    if (explicitName && !sameDisplayName(explicitName, binding.projectName)) {
       throw new WorkspaceProjectError(
         "PROJECT_DESTINATION_MISMATCH",
-        "ChatGPT's composer appears bound to a different Project than the workspace mapping."
+        "The composer explicitly identifies a different Project."
       );
     }
+
     return binding;
-  }
-
-  async verifyProjectOnlyMemory(workspaceId: string): Promise<{
-    page: Page;
-    binding: WorkspaceProjectBinding;
-  }> {
-    const opened = await this.openBoundProject(workspaceId);
-    const dialog = await openProjectSettings(opened.page, opened.binding);
-    try {
-      await verifyProjectOnlyInSettings(opened.page, dialog);
-    } finally {
-      await opened.page.keyboard.press("Escape").catch(() => undefined);
-      await opened.page.waitForTimeout(100);
-    }
-
-    const now = new Date().toISOString();
-    const updated: WorkspaceProjectBinding = {
-      ...opened.binding,
-      memoryMode: "project-only",
-      memoryVerifiedAt: now,
-      memoryVerificationSource: "settings",
-      status: "ready",
-      updatedAt: now,
-    };
-    this.store.upsert(updated);
-    await this.assertPageBoundToWorkspace(opened.page, workspaceId);
-    return { page: opened.page, binding: updated };
   }
 
   async openBoundProject(workspaceId: string): Promise<{
@@ -434,51 +348,53 @@ export class WorkspaceProjectManager {
     binding: WorkspaceProjectBinding;
   }> {
     const binding = this.store.get(workspaceId);
-    if (binding.status !== "ready" || binding.memoryMode !== "project-only" || !binding.memoryVerifiedAt) {
+    if (
+      binding.status !== "ready" ||
+      binding.memoryMode !== "project-only" ||
+      !binding.memoryVerifiedAt
+    ) {
       throw new WorkspaceProjectError(
         "PROJECT_MEMORY_UNVERIFIED",
-        "Workspace project exists locally but Project-only memory is not verified."
+        "Workspace binding was not created with verified Project-only memory."
       );
     }
 
     let page = await this.runtime.page();
-    let onProjectHome = false;
     try {
       const current = new URL(page.url());
-      onProjectHome =
+      if (
         extractProjectId(page.url()) === binding.projectId &&
-        /\/project\/?$/.test(current.pathname);
+        /\/project\/?$/.test(current.pathname) &&
+        (await visibleComposer(page))
+      ) {
+        await this.assertPageBoundToWorkspace(page, workspaceId);
+        return { page, binding };
+      }
     } catch {
-      onProjectHome = false;
-    }
-    if (onProjectHome) {
-      await this.assertPageBoundToWorkspace(page, workspaceId);
-      return { page, binding };
+      // Navigate from the root below.
     }
 
     page = await this.rootPage();
     const target = await this.findSidebarProject(page, binding);
-    if (target) {
-      await target.click();
-    } else {
-      // Fallback only to the exact locally stored project URL; never search/adopt by name.
-      await page.goto(binding.projectUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    if (!target) {
+      throw new WorkspaceProjectError(
+        "PROJECT_NOT_FOUND",
+        "The exact ChatGPT Project bound to this workspace is not visible in the sidebar."
+      );
     }
+    await target.click();
 
     const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
       const observed = extractProjectId(page.url());
-      if (observed === binding.projectId) {
-        const composer = await visibleComposer(page);
-        if (composer) {
-          await this.assertPageBoundToWorkspace(page, workspaceId);
-          return { page, binding };
-        }
+      if (observed === binding.projectId && (await visibleComposer(page))) {
+        await this.assertPageBoundToWorkspace(page, workspaceId);
+        return { page, binding };
       }
       if (observed && observed !== binding.projectId) {
         throw new WorkspaceProjectError(
           "PROJECT_DESTINATION_MISMATCH",
-          "ChatGPT navigated to a different project than the workspace binding."
+          "ChatGPT navigated to a different Project than the workspace binding."
         );
       }
       await page.waitForTimeout(250);
@@ -486,7 +402,7 @@ export class WorkspaceProjectManager {
 
     throw new WorkspaceProjectError(
       "PROJECT_NAVIGATION_FAILED",
-      "Could not reopen the exact ChatGPT Project bound to this workspace. It may have been deleted or the UI changed."
+      "The sidebar Project navigation did not reach a usable bound Project."
     );
   }
 
@@ -498,37 +414,38 @@ export class WorkspaceProjectManager {
     const workspaceId = validateWorkspaceId(input.workspaceId);
     const existing = this.store.find(workspaceId);
     if (existing) {
-      if (existing.status !== "ready") {
-        throw new WorkspaceProjectError(
-          "PROJECT_MEMORY_UNVERIFIED",
-          "Existing local binding is not verified for Project-only memory."
-        );
-      }
-      const verified = await this.verifyProjectOnlyMemory(workspaceId);
-      return verified.binding;
+      await this.openBoundProject(workspaceId);
+      return existing;
     }
 
     const namingMode = input.namingMode ?? "workspace-name";
     const workspaceName =
-      input.workspaceName === undefined ? undefined : sanitizeWorkspaceName(input.workspaceName);
-    const projectName = projectNameFor({ workspaceId, workspaceName, namingMode });
+      input.workspaceName === undefined
+        ? undefined
+        : sanitizeWorkspaceName(input.workspaceName);
+    const projectName = projectNameFor({
+      workspaceId,
+      workspaceName,
+      namingMode,
+    });
 
     const page = await this.rootPage();
     let newProject = await firstVisible(page, NEW_PROJECT_SELECTORS);
     if (!newProject) {
-      const byText = page.getByRole("button", { name: /new project|새 프로젝트/i }).first();
-      if (await byText.isVisible().catch(() => false)) newProject = byText;
+      const fallback = page
+        .getByRole("button", { name: /new project|새 프로젝트/i })
+        .first();
+      if (await fallback.isVisible().catch(() => false)) newProject = fallback;
     }
     if (!newProject) {
       throw new WorkspaceProjectError(
         "PROJECT_CREATE_UNAVAILABLE",
-        "Could not find ChatGPT's New project control."
+        "Could not find ChatGPT's New Project control."
       );
     }
 
     await newProject.click();
-    await page.waitForTimeout(200);
-    let dialog = await projectDialog(page);
+    const dialog = await waitForProjectCreationScope(page);
 
     let nameInput = await firstVisible(dialog, PROJECT_NAME_INPUT_SELECTORS);
     if (!nameInput) {
@@ -545,21 +462,26 @@ export class WorkspaceProjectManager {
     if (!nameInput) {
       throw new WorkspaceProjectError(
         "PROJECT_CREATE_FAILED",
-        "New-project UI opened but no visible project-name input was found."
+        "New Project dialog has no visible name input."
       );
     }
 
     await nameInput.fill(projectName);
     await selectProjectOnlyMemory(page, dialog);
 
-    dialog = await projectDialog(page);
-    let create = dialog.getByRole("button", { name: CREATE_PROJECT_LABEL }).last();
+    let create = dialog
+      .getByRole("button", { name: CREATE_PROJECT_LABEL })
+      .last();
     if (!(await create.isVisible().catch(() => false))) {
       create = dialog.locator('button[type="submit"]').last();
     }
+
     if (await create.isVisible().catch(() => false)) {
       if (!(await create.isEnabled().catch(() => false))) {
-        throw new WorkspaceProjectError("PROJECT_CREATE_FAILED", "Project create button is disabled.");
+        throw new WorkspaceProjectError(
+          "PROJECT_CREATE_FAILED",
+          "Project create button is disabled."
+        );
       }
       await create.click();
     } else {
@@ -570,25 +492,13 @@ export class WorkspaceProjectManager {
     let projectId: string | null = null;
     while (Date.now() < deadline) {
       projectId = extractProjectId(page.url());
-      if (projectId) break;
+      if (projectId && (await visibleComposer(page))) break;
       await page.waitForTimeout(250);
     }
-    if (!projectId || !isValidProjectId(projectId)) {
+    if (!projectId || !isValidProjectId(projectId) || !(await visibleComposer(page))) {
       throw new WorkspaceProjectError(
         "PROJECT_CREATE_FAILED",
-        "Project creation did not land on a verifiable ChatGPT Project URL."
-      );
-    }
-
-    const composerDeadline = Date.now() + 10_000;
-    while (Date.now() < composerDeadline) {
-      if (await visibleComposer(page)) break;
-      await page.waitForTimeout(250);
-    }
-    if (!(await visibleComposer(page))) {
-      throw new WorkspaceProjectError(
-        "PROJECT_CREATE_FAILED",
-        "Project URL was created but its composer did not become usable; no local binding was saved."
+        "Project creation did not land on a verifiable Project with a usable composer."
       );
     }
 

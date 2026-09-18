@@ -129,9 +129,9 @@ memory를 실제 UI에서 선택하고 선택 상태를 확인한 경우에만**
 fallback하지 않습니다.
 
 이후 모든 `chatgpt_send` / `chatgpt_chat`에 동일한 `workspace_id`를
-전달합니다. 그리고 **매 workspace send 직전 Project settings를 다시 열어 현재
-Memory가 여전히 Project-only인지 재검증**합니다. 확인할 수 없거나 다른 memory
-mode이면 prompt를 보내지 않습니다.
+전달합니다. Project-only memory는 **Project 생성 시 한 번 확인**하고, 일반 send
+경로에서는 settings를 다시 열지 않습니다. 이후에는 exact project ID와 실제
+전송 destination을 확인합니다.
 
 ```text
 workspace A → Project A → 여러 chat
@@ -144,6 +144,8 @@ workspace B → Project B → 여러 chat
 기본값은 Project 격리 필수입니다. 의도적으로 일반 ChatGPT chat을 사용하려는
 경우에만 `CGW_REQUIRE_WORKSPACE_PROJECT=false`로 opt-out 할 수 있습니다.
 
+신규 CGW-managed Project에는 항상 `CGW-` prefix가 붙습니다. 예:
+`CGW-vm-placement · 8d836f`, `CGW-Workspace 8d836fa94e80`.
 Project 이름이 민감하면 `anonymous` naming을 사용할 수 있습니다. 자세한 내용은
 [docs/workspace-project-isolation.md](docs/workspace-project-isolation.md)를 참고하세요.
 
@@ -155,13 +157,14 @@ read 권한을 주지는 않습니다.
 추가 도구:
 
 - `chatgpt_stage_text`
-- `chatgpt_stage_blob`
+- 1 MiB 이하 작은 binary용 `chatgpt_stage_blob`
 - 큰 binary용 `chatgpt_create_blob_slot` / `chatgpt_commit_blob_slot`
-- `chatgpt_list_staged_inputs`
-- `chatgpt_discard_staged_input`
 
 staging 결과의 `input_asset_id`를 `chatgpt_send` 또는 `chatgpt_chat`의
 `input_asset_ids`에 넘기면 그때 실제 ChatGPT Web 첨부가 발생합니다.
+
+staging 목록/삭제, workspace mapping 목록/unbind 같은 관리 작업은 MCP tool이
+아니라 CLI 명령으로만 제공합니다.
 
 MCP는 local path를 입력으로 받지 않습니다. Source code, diff, log, Markdown,
 CSV/TSV, JSON/XML/YAML 등은 text staging으로 처리하고, binary는 PDF, DOCX,

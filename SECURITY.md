@@ -49,7 +49,7 @@ The persistent browser profile contains authentication state and is sensitive.
 | ChatGPT runs local commands | No shell/process execution tool is exposed |
 | Malicious model-generated patch | Returned as text only; proxy cannot apply it |
 | Arbitrary local-file exfiltration | Input tools never accept filesystem paths; only caller-provided text/base64 bytes can enter private staging |
-| Secret/credential attachment | Sensitive filenames, obvious private-key/token material, archives/executables and unknown binary are rejected before staging |
+| Secret/credential attachment | Sensitive filenames and actual private-key blocks are hard-blocked; broad token-like strings are not treated as definitive secrets; archives/executables and unknown binary are rejected |
 | Staged-input tampering | SHA-256, size, regular-file and symlink checks run again immediately before browser upload |
 | Stale staged input | Private input staging expires automatically by TTL; expiry is local only and does not imply remote ChatGPT deletion |
 | Cookie/token exfiltration through MCP | No cookie/storage/profile read tools exist |
@@ -92,12 +92,11 @@ memory, that option is selected, and its selected state can be verified. It
 does not adopt an existing Project by visible name and does not silently
 fallback to default memory.
 
-Because ChatGPT allows Project memory settings to be changed later, CGW also
-reopens Project settings and re-verifies the currently selected memory mode
-before every workspace send. Failure to verify blocks the send. CGW cannot
-independently observe the service's asynchronous backend propagation after a
-human changes the setting, so users should not manually toggle memory mode on
-CGW-managed Projects when strict isolation matters.
+Project-only memory is verified during Project creation. Normal sends do not
+reopen settings because the Web UI cannot prove backend memory propagation and
+doing so adds fragile navigation to every hot path. A later manual settings
+change is an external mutation; users who require the isolation guarantee
+should not change the memory mode of CGW-managed Projects.
 
 Local binding state stores only the opaque workspace id plus exact ChatGPT
 Project identity. Raw workspace paths and Git remote URLs are outside the MCP
@@ -137,6 +136,11 @@ structure is not guessed; flattened visible text remains available.
 
 Generated asset source URLs are not exposed through MCP. Only opaque asset ids
 are returned in manifests.
+
+## Read-only browser diagnostics
+
+Status/model discovery uses a temporary page in the same authenticated browser
+context. It does not navigate the tab currently holding a Project/thread.
 
 ## Authentication
 

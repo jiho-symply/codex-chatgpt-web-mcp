@@ -91,13 +91,13 @@ Two modes are available.
 Default:
 
 ```text
-<workspace display name> · <short workspace hash>
+CGW-<workspace display name> · <short workspace hash>
 ```
 
 For example:
 
 ```text
-vm-placement · 8d836f
+CGW-vm-placement · 8d836f
 ```
 
 The display name is visible in ChatGPT, so use this mode only when revealing
@@ -106,14 +106,18 @@ that name is acceptable.
 ### anonymous
 
 ```text
-Workspace <short workspace hash>
+CGW-Workspace <short workspace hash>
 ```
 
 For example:
 
 ```text
-Workspace 8d836fa94e80
+CGW-Workspace 8d836fa94e80
 ```
+
+The fixed `CGW-` prefix is applied to all newly created Projects so CGW-managed
+Projects are easy to distinguish in the ChatGPT sidebar. Existing Projects are
+not automatically renamed.
 
 Use anonymous naming when the local repository/workspace name itself is
 sensitive.
@@ -139,25 +143,19 @@ or if the selection cannot be verified, binding fails with
 
 CGW deliberately does not fall back to a default-memory Project.
 
-## Live memory-mode verification
+## Memory-mode verification scope
 
-Project memory settings can be changed later in ChatGPT. Therefore a creation-time
-check is not treated as permanently sufficient.
+Project-only memory is verified **once, during Project creation**. CGW does not
+open Project settings on every send.
 
-Before **every workspace send**, CGW reopens the exact bound Project, opens its
-Project settings, and verifies that the currently selected Memory mode is still
-Project-only. The local binding records the latest verification time and source.
+This is intentional: the Web UI can show a selected setting but cannot prove
+when backend memory behavior has converged, while repeatedly opening settings
+adds fragile UI steps to the hot path.
 
-If settings cannot be opened, the memory control cannot be interpreted safely,
-or Project-only is not currently selected, the send fails before the prompt is
-submitted.
-
-CGW does not automatically switch a Project's memory setting during a send.
-
-ChatGPT may apply memory-setting changes asynchronously. A visible UI selection
-is the strongest state the Web proxy can verify; CGW cannot prove server-side
-propagation timing after a user manually changes settings. For the strongest
-isolation guarantee, do not manually toggle memory mode on CGW-managed Projects.
+A later manual change to the Project's memory mode is an external mutation. If
+strict workspace isolation matters, do not manually change memory settings on
+CGW-managed Projects. Rebinding an existing workspace reopens the exact Project
+but does not silently rewrite its settings.
 
 ## Sending
 
@@ -187,8 +185,8 @@ Before typing, CGW verifies:
 
 - the Project id in the active ChatGPT URL matches the local binding;
 - a usable composer exists;
-- if the composer visibly names its Project, that name is consistent with the
-  binding.
+- only when the composer **explicitly names** a Project, that name must match
+  the binding. Generic labels such as "New chat" are accepted.
 
 After sending, it verifies the resulting thread still belongs to the same
 Project.
@@ -209,8 +207,10 @@ enough to reuse an old thread for a fresh send.
 
 ## Missing or deleted Projects
 
-If a locally bound Project disappears from ChatGPT, CGW does not search for a
-replacement by name.
+If a locally bound Project disappears from ChatGPT, CGW does not hard-load its
+stored Project URL or search for a replacement by name. Fresh-chat navigation
+uses ChatGPT's sidebar SPA path; if the exact Project is not there, the
+operation fails.
 
 The operation fails instead. This prevents an unrelated same-name Project from
 silently becoming the destination for a workspace.
@@ -219,7 +219,9 @@ The user may explicitly unbind the local mapping and create a new binding.
 
 ## Unbinding
 
-`chatgpt_unbind_workspace` deletes only CGW's local mapping.
+`cgw unbind-workspace <workspace_id>` deletes only CGW's local mapping.
+
+This is a CLI management operation rather than an agent-facing MCP tool.
 
 It **does not delete the remote ChatGPT Project**.
 

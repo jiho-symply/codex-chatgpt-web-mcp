@@ -43,6 +43,7 @@ describe("config", () => {
     expect(config.timeoutMs).toBe(45_000);
     expect(config.stableMs).toBe(7_000);
     expect(config.maxAssetBytes).toBe(25 * 1024 * 1024);
+    expect(config.maxInlineBlobBytes).toBe(1024 * 1024);
     expect(config.requireWorkspaceProject).toBe(true);
   });
 

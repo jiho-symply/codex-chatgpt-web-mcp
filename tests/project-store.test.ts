@@ -41,13 +41,13 @@ describe("workspace project store", () => {
         workspaceName: "vm-placement",
         namingMode: "workspace-name",
       })
-    ).toBe("vm-placement · 012345");
+    ).toBe("CGW-vm-placement · 012345");
     expect(
       projectNameFor({
         workspaceId,
         namingMode: "anonymous",
       })
-    ).toBe("Workspace 0123456789ab");
+    ).toBe("CGW-Workspace 0123456789ab");
   });
 
   it("rejects paths and URLs as display names", () => {
@@ -68,7 +68,7 @@ describe("workspace project store", () => {
       workspaceName: "demo",
       namingMode: "workspace-name" as const,
       projectId: "g-p-6aa23c9208608191a9b5403be2098710",
-      projectName: "demo · 012345",
+      projectName: "CGW-demo · 012345",
       projectUrl: "https://chatgpt.com/g/g-p-6aa23c9208608191a9b5403be2098710/project",
       memoryMode: "project-only" as const,
       memoryVerifiedAt: now,
@@ -98,7 +98,7 @@ describe("workspace project store", () => {
       workspaceName: null,
       namingMode: "anonymous" as const,
       projectId: "g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      projectName: "Workspace abcdef012345",
+      projectName: "CGW-Workspace abcdef012345",
       projectUrl: "https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/project",
       memoryMode: "project-only" as const,
       memoryVerifiedAt: now,

@@ -201,7 +201,7 @@ program
 
 program
   .command("stage-blob")
-  .description("Stage supported explicit binary bytes from base64 for a later attachment")
+  .description("Stage a small supported binary (up to 1 MiB) from base64 for a later attachment")
   .requiredOption("--filename <name>")
   .requiredOption("--mime <mime>")
   .argument("<data-base64>")
@@ -221,20 +221,16 @@ program
 
 program
   .command("create-blob-slot")
-  .description("Create a short-lived private CGW write slot for a large supported binary")
+  .description("Create a short-lived private CGW write slot for a supported binary")
   .requiredOption("--filename <name>")
   .requiredOption("--mime <mime>")
-  .requiredOption("--size-bytes <n>", "exact byte size", parseInteger)
-  .requiredOption("--sha256 <hex>")
-  .action(async (opts: { filename: string; mime: string; sizeBytes: number; sha256: string }) => {
+  .action(async (opts: { filename: string; mime: string }) => {
     say(
       await withContext(true, (client) =>
         Promise.resolve(
           client.createBlobInputSlot({
             filename: opts.filename,
             mime: opts.mime,
-            sizeBytes: opts.sizeBytes,
-            sha256: opts.sha256,
           })
         )
       )

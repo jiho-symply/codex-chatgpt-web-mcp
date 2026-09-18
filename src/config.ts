@@ -9,6 +9,7 @@ export const MAX_PROMPT_BYTES = 512 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 export const MAX_STAGED_TEXT_BYTES = 4 * 1024 * 1024;
+export const MAX_INLINE_BLOB_BYTES = 1024 * 1024;
 export const MAX_INPUT_ASSET_BYTES = 20 * 1024 * 1024;
 export const MAX_INPUT_TOTAL_BYTES = 50 * 1024 * 1024;
 export const MAX_INPUT_ATTACHMENTS = 10;
@@ -25,6 +26,7 @@ export interface AppConfig {
   maxResponseBytes: number;
   maxAssetBytes: number;
   maxStagedTextBytes: number;
+  maxInlineBlobBytes: number;
   maxInputAssetBytes: number;
   maxInputTotalBytes: number;
   maxInputAttachments: number;
@@ -101,6 +103,7 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
     maxResponseBytes: MAX_RESPONSE_BYTES,
     maxAssetBytes: MAX_ASSET_BYTES,
     maxStagedTextBytes: MAX_STAGED_TEXT_BYTES,
+    maxInlineBlobBytes: MAX_INLINE_BLOB_BYTES,
     maxInputAssetBytes: MAX_INPUT_ASSET_BYTES,
     maxInputTotalBytes: MAX_INPUT_TOTAL_BYTES,
     maxInputAttachments: MAX_INPUT_ATTACHMENTS,

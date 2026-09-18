@@ -37,8 +37,8 @@ For implementation work:
 
 1. Codex derives a stable opaque `workspace_id = ws_<hex>` locally. Never send
    the raw workspace path or Git remote.
-2. Call `chatgpt_bind_workspace` once for that id. Repeated calls verify/reopen
-   the same exact Project.
+2. Call `chatgpt_bind_workspace` once for that id. Repeated calls reopen the
+   same exact Project; they do not reconfigure Project memory settings.
 3. Codex identifies relevant files.
 4. Codex reads those files locally.
 5. Codex generates a stable request id and sends only necessary excerpts with
@@ -136,8 +136,9 @@ For small relevant excerpts, inline text in the prompt is usually simplest.
 For larger source files, logs, structured data, documents, or screenshots:
 
 1. Codex reads/selects the material using its own workspace capabilities.
-2. Use `chatgpt_stage_text` for UTF-8/code/log/data text, or
-   `chatgpt_stage_blob` for supported document/image bytes.
+2. Use `chatgpt_stage_text` for UTF-8/code/log/data text. Use
+   `chatgpt_stage_blob` only for small binary inputs (up to 1 MiB), and use a
+   blob slot for larger supported document/image files.
 3. Keep the returned `input_asset_id`.
 4. Pass only the intended ids in `input_asset_ids` on `chatgpt_send`.
 5. After upload, remember that local CGW TTL/discard controls only local staging,
