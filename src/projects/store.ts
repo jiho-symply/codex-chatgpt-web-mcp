@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { ensurePrivateDir } from "../config.js";
 
+export const PROJECT_NAME_PREFIX = "CGW-";
 export type ProjectNamingMode = "workspace-name" | "anonymous";
 export type WorkspaceProjectStatus = "ready" | "memory_unverified";
 
@@ -15,7 +16,7 @@ export interface WorkspaceProjectBinding {
   projectUrl: string;
   memoryMode: "project-only";
   memoryVerifiedAt: string | null;
-  memoryVerificationSource: "creation" | "settings" | null;
+  memoryVerificationSource: "creation" | null;
   status: WorkspaceProjectStatus;
   createdAt: string;
   updatedAt: string;
@@ -113,7 +114,7 @@ export function projectNameFor(input: {
 }): string {
   const workspaceId = validateWorkspaceId(input.workspaceId);
   const short = workspaceId.slice(3, 15);
-  if (input.namingMode === "anonymous") return "Workspace " + short;
+  if (input.namingMode === "anonymous") return PROJECT_NAME_PREFIX + "Workspace " + short;
   if (!input.workspaceName) {
     throw new WorkspaceProjectStoreError(
       "WORKSPACE_ID_INVALID",
@@ -121,7 +122,7 @@ export function projectNameFor(input: {
     );
   }
   const name = sanitizeWorkspaceName(input.workspaceName);
-  return name + " · " + short.slice(0, 6);
+  return PROJECT_NAME_PREFIX + name + " · " + short.slice(0, 6);
 }
 
 export class WorkspaceProjectStore {

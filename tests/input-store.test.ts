@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppConfig } from "../src/config.js";
 import { InputPolicyError } from "../src/inputs/policy.js";
@@ -32,6 +31,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     maxResponseBytes: 1024 * 1024,
     maxAssetBytes: 25 * 1024 * 1024,
     maxStagedTextBytes: 4 * 1024 * 1024,
+    maxInlineBlobBytes: 1024 * 1024,
     maxInputAssetBytes: 20 * 1024 * 1024,
     maxInputTotalBytes: 50 * 1024 * 1024,
     maxInputAttachments: 10,
@@ -61,7 +61,7 @@ describe("InputStore", () => {
     expect(fs.readFileSync(resolved[0]!.path, "utf8")).toContain("export const");
   });
 
-  it("blocks credential-like filenames and obvious secret content", () => {
+  it("blocks credential-like filenames and actual private-key blocks", () => {
     const store = new InputStore(tmp(), config());
     expect(() =>
       store.stageText({ filename: ".env", content: "SAFE=value" })
@@ -72,6 +72,13 @@ describe("InputStore", () => {
         content: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
       })
     ).toThrowError(InputPolicyError);
+
+    expect(() =>
+      store.stageText({
+        filename: "token-fixture.txt",
+        content: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      })
+    ).not.toThrow();
   });
 
   it("rejects archives and unknown binary", () => {
@@ -132,38 +139,58 @@ describe("InputStore", () => {
   });
 
 
-  it("commits a large-binary write slot only after exact hash/size validation", () => {
+  it("commits a binary write slot and computes integrity metadata at commit", () => {
     const dir = tmp();
     const store = new InputStore(dir, config());
     const pdf = Buffer.from("%PDF-1.7\nbody\n");
-    const sha256 = createHash("sha256").update(pdf).digest("hex");
     const slot = store.createBlobSlot({
       filename: "spec.pdf",
       mime: "application/pdf",
-      sizeBytes: pdf.length,
-      sha256,
     });
 
     expect(slot.writePath.startsWith(path.join(dir, "input-staging", "inbox"))).toBe(true);
     fs.writeFileSync(slot.writePath, pdf);
+
     const staged = store.commitBlobSlot(slot.slotId);
     expect(staged.filename).toBe("spec.pdf");
     expect(staged.kind).toBe("document");
+    expect(staged.sizeBytes).toBe(pdf.length);
+    expect(staged.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(() => store.commitBlobSlot(slot.slotId)).toThrowError(InputStoreError);
   });
 
-  it("rejects blob-slot size/hash mismatch", () => {
+  it("rejects invalid or oversized blob-slot content at commit", () => {
     const dir = tmp();
-    const store = new InputStore(dir, config());
-    const pdf = Buffer.from("%PDF-1.7\nbody\n");
-    const slot = store.createBlobSlot({
+    const invalidStore = new InputStore(dir, config());
+    const invalid = invalidStore.createBlobSlot({
       filename: "spec.pdf",
       mime: "application/pdf",
-      sizeBytes: pdf.length,
-      sha256: "0".repeat(64),
     });
-    fs.writeFileSync(slot.writePath, pdf);
-    expect(() => store.commitBlobSlot(slot.slotId)).toThrowError(InputStoreError);
+    fs.writeFileSync(invalid.writePath, "not a pdf");
+    expect(() => invalidStore.commitBlobSlot(invalid.slotId)).toThrowError(InputPolicyError);
+
+    const smallLimitStore = new InputStore(dir, config({ maxInputAssetBytes: 8 }));
+    const oversized = smallLimitStore.createBlobSlot({
+      filename: "large.pdf",
+      mime: "application/pdf",
+    });
+    fs.writeFileSync(oversized.writePath, Buffer.from("%PDF-1.7\nbody\n"));
+    expect(() => smallLimitStore.commitBlobSlot(oversized.slotId)).toThrowError(InputStoreError);
+  });
+
+  it("keeps base64 blob staging as a small-file convenience path", () => {
+    const store = new InputStore(tmp(), config({ maxInlineBlobBytes: 8 }));
+    const png = Buffer.concat([
+      Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),
+      Buffer.from("too-large"),
+    ]);
+    expect(() =>
+      store.stageBlob({
+        filename: "bug.png",
+        mime: "image/png",
+        dataBase64: png.toString("base64"),
+      })
+    ).toThrowError(InputPolicyError);
   });
 
   it("detects staged-file tampering before upload", () => {

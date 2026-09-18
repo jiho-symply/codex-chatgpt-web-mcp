@@ -75,8 +75,6 @@ interface BlobSlotRecord {
   slotId: string;
   filename: string;
   mime: string;
-  expectedSizeBytes: number;
-  expectedSha256: string;
   createdAt: string;
   expiresAt: string;
 }
@@ -172,6 +170,7 @@ export class InputStore {
     private readonly stateDir: string,
     private readonly config: Pick<
       AppConfig,
+      | "maxInlineBlobBytes"
       | "maxInputAssetBytes"
       | "maxInputTotalBytes"
       | "maxInputAttachments"
@@ -246,28 +245,17 @@ export class InputStore {
   createBlobSlot(input: {
     filename: string;
     mime: string;
-    sizeBytes: number;
-    sha256: string;
   }): {
     slotId: string;
     filename: string;
     mime: string;
-    expectedSizeBytes: number;
-    expectedSha256: string;
     writePath: string;
     expiresAt: string;
   } {
-    const metadata = validateBinaryMetadata({ filename: input.filename, mime: input.mime });
-    if (!Number.isInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > this.config.maxInputAssetBytes) {
-      throw new InputStoreError(
-        "INPUT_TOO_LARGE",
-        "Binary slot size must be 1-" + this.config.maxInputAssetBytes + " bytes."
-      );
-    }
-    const sha256 = input.sha256.trim().toLowerCase();
-    if (!/^[a-f0-9]{64}$/.test(sha256)) {
-      throw new InputStoreError("INPUT_INTEGRITY_ERROR", "Expected SHA-256 must be 64 lowercase/uppercase hex characters.");
-    }
+    const metadata = validateBinaryMetadata({
+      filename: input.filename,
+      mime: input.mime,
+    });
 
     this.cleanupSlots();
     const slotId = "slot_" + randomBytes(12).toString("hex");
@@ -276,22 +264,26 @@ export class InputStore {
       slotId,
       filename: metadata.filename,
       mime: metadata.mime,
-      expectedSizeBytes: input.sizeBytes,
-      expectedSha256: sha256,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + INPUT_SLOT_TTL_MS).toISOString(),
     };
+
     const dataPath = slotDataPath(this.stateDir, slotId);
     const metaPath = slotMetaPath(this.stateDir, slotId);
     fs.writeFileSync(dataPath, Buffer.alloc(0), { flag: "wx", mode: 0o600 });
-    fs.writeFileSync(metaPath, JSON.stringify(record, null, 2), { flag: "wx", mode: 0o600 });
-    try { fs.chmodSync(dataPath, 0o600); fs.chmodSync(metaPath, 0o600); } catch {}
+    fs.writeFileSync(metaPath, JSON.stringify(record, null, 2), {
+      flag: "wx",
+      mode: 0o600,
+    });
+    try {
+      fs.chmodSync(dataPath, 0o600);
+      fs.chmodSync(metaPath, 0o600);
+    } catch {}
+
     return {
       slotId,
       filename: record.filename,
       mime: record.mime,
-      expectedSizeBytes: record.expectedSizeBytes,
-      expectedSha256: record.expectedSha256,
       writePath: dataPath,
       expiresAt: record.expiresAt,
     };
@@ -303,22 +295,28 @@ export class InputStore {
       this.discardSlot(slotId);
       throw new InputStoreError("INPUT_SLOT_EXPIRED", "Input slot has expired: " + slotId);
     }
+
     const dataPath = slotDataPath(this.stateDir, slotId);
-    if (!fs.existsSync(dataPath) || fs.lstatSync(dataPath).isSymbolicLink() || !fs.statSync(dataPath).isFile()) {
-      throw new InputStoreError("INPUT_INTEGRITY_ERROR", "Input slot data file is missing or unsafe.");
-    }
-    const stat = fs.statSync(dataPath);
-    if (stat.size !== record.expectedSizeBytes) {
+    if (
+      !fs.existsSync(dataPath) ||
+      fs.lstatSync(dataPath).isSymbolicLink() ||
+      !fs.statSync(dataPath).isFile()
+    ) {
       throw new InputStoreError(
         "INPUT_INTEGRITY_ERROR",
-        "Input slot size mismatch: expected " + record.expectedSizeBytes + ", got " + stat.size + "."
+        "Input slot data file is missing or unsafe."
       );
     }
-    const bytes = fs.readFileSync(dataPath);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    if (sha256 !== record.expectedSha256) {
-      throw new InputStoreError("INPUT_INTEGRITY_ERROR", "Input slot SHA-256 mismatch.");
+
+    const stat = fs.statSync(dataPath);
+    if (stat.size < 1 || stat.size > this.config.maxInputAssetBytes) {
+      throw new InputStoreError(
+        "INPUT_TOO_LARGE",
+        "Binary slot content must be 1-" + this.config.maxInputAssetBytes + " bytes."
+      );
     }
+
+    const bytes = fs.readFileSync(dataPath);
     const validated = validateBinaryInput({
       filename: record.filename,
       mime: record.mime,
@@ -355,7 +353,7 @@ export class InputStore {
   }
 
   stageBlob(input: { filename: string; mime: string; dataBase64: string }): InputAssetView {
-    const bytes = decodeStrictBase64(input.dataBase64, this.config.maxInputAssetBytes);
+    const bytes = decodeStrictBase64(input.dataBase64, this.config.maxInlineBlobBytes);
     const validated = validateBinaryInput({
       filename: input.filename,
       mime: input.mime,

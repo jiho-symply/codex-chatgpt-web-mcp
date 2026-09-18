@@ -63,8 +63,8 @@ origin.
 - **Serialized requests** — one browser profile is used by one request at a
   time to prevent cross-conversation races.
 - **Workspace Project isolation** — each opaque workspace identity maps to one
-  exact ChatGPT Project with Project-only memory; destination identity is
-  verified before and after sends.
+  exact ChatGPT Project created with Project-only memory; later sends verify the
+  exact Project destination before and after dispatch without reopening settings.
 - **Bounded I/O** — prompt, response, and explicitly retrieved asset sizes are capped locally.
 - **Private asset staging** — generated response assets are never downloaded to the workspace automatically.
 - **Explicit input staging** — ChatGPT attachments must be supplied as caller-provided text/base64 bytes; the proxy never reads arbitrary local paths.
@@ -86,6 +86,9 @@ ChatGPT composer is usable.
 
 Reads the live model/effort picker choices visible to the signed-in account.
 The web UI is the source of truth; model names are not hard-coded.
+
+`chatgpt_status` and `chatgpt_capabilities` use a temporary browser page so
+read-only diagnostics do not navigate the active Project/thread tab.
 
 ### `chatgpt_send` / `chatgpt_wait` / `chatgpt_get_reply` / `chatgpt_stop`
 
@@ -193,7 +196,7 @@ ChatGPT does not need to know that Codex is the caller; it only receives the pro
 
 ## Workspace → Project isolation
 
-Version 0.5 uses one exact ChatGPT Project per local Codex workspace by default.
+Version 0.5+ uses one exact ChatGPT Project per local Codex workspace by default.
 
 The caller derives an opaque local `workspace_id` such as
 `ws_8d836fa94e80b7ef21014b10`, then binds it once:
@@ -207,8 +210,8 @@ Project-only memory is visibly selected and verified. It never silently adopts
 an existing same-name Project and never falls back to a default-memory Project.
 
 After binding, pass `workspace_id` on every `chatgpt_send` /
-`chatgpt_chat` call. Before every workspace send, CGW reopens Project settings
-and verifies that Project-only memory is still selected:
+`chatgpt_chat` call. Project-only memory is verified once during creation;
+normal sends do not reopen Project settings:
 
 ```text
 workspace A → Project A → fresh/continued chats
@@ -223,6 +226,8 @@ Project isolation is required by default. Set
 `CGW_REQUIRE_WORKSPACE_PROJECT=false` only for intentional legacy/general-chat
 use.
 
+Every newly created CGW-managed Project gets the fixed `CGW-` prefix, for
+example `CGW-vm-placement · 8d836f` or `CGW-Workspace 8d836fa94e80`.
 Project naming can expose the workspace display name or be anonymous. Raw
 workspace paths and Git remote URLs must never be sent as `workspace_id`.
 
@@ -237,13 +242,15 @@ filesystem access.
 New tools:
 
 - `chatgpt_stage_text`
-- `chatgpt_stage_blob`
+- `chatgpt_stage_blob` for small binaries (up to 1 MiB)
 - `chatgpt_create_blob_slot` / `chatgpt_commit_blob_slot` for larger binaries
-- `chatgpt_list_staged_inputs`
-- `chatgpt_discard_staged_input`
 
 Then pass returned `input_asset_id` values to `chatgpt_send` or
 `chatgpt_chat`.
+
+Staging/project maintenance operations such as listing staged inputs, discarding
+them, listing workspace mappings, and unbinding are CLI commands rather than MCP
+tools, keeping the agent-facing tool surface small.
 
 The proxy never accepts an arbitrary local path. Staged input lives under
 private CGW state, is integrity-checked before upload, and expires automatically.
@@ -252,8 +259,9 @@ Supported binary inputs are currently PDF, DOCX, PPTX, XLSX/XLS, PNG, JPEG, and
 GIF. Text staging covers source code, logs, diffs, Markdown/TXT, CSV/TSV,
 JSON/XML/YAML/TOML/SQL, and other UTF-8 text.
 
-Credential-like filenames/content, archives, executables, and unknown binary
-are rejected. See [docs/input-attachments.md](docs/input-attachments.md).
+Credential-like filenames and private-key blocks are rejected. Token-looking
+strings in ordinary source/test fixtures are not treated as definitive secrets.
+Archives, executables, and unknown binary are rejected. See [docs/input-attachments.md](docs/input-attachments.md).
 
 ## Structured responses
 

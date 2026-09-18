@@ -41,7 +41,7 @@ The server is responsible only for:
 
 - persistent browser lifecycle
 - ChatGPT authentication-state detection
-- workspace→Project binding with Project-only-memory verification
+- workspace→Project binding with Project-only-memory verification at creation
 - project-aware fixed-origin navigation
 - conversation reuse
 - live model/effort picker discovery
@@ -132,8 +132,9 @@ The raw workspace path/remote never has to cross MCP. CGW does not search
 existing Projects by name. A missing binding creates a new Project only if
 Project-only memory can be selected and verified.
 
-Fresh sends navigate to Project home; continuations use the exact Project-aware
-thread URL. Project identity is carried in turn/output-asset state.
+Fresh sends navigate to Project home through the sidebar SPA; continuations use
+the exact Project-aware thread URL. Project settings are not reopened on every
+send. Project identity is carried in turn/output-asset state.
 
 See [workspace-project-isolation.md](workspace-project-isolation.md).
 

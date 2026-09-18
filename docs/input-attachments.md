@@ -51,8 +51,8 @@ path.
 
 ### chatgpt_stage_blob
 
-Use for small supported binary document/image inputs when passing base64 through
-the MCP call is practical.
+Use only for small supported binary document/image inputs (up to 1 MiB) when
+passing base64 through the MCP call is practical.
 
 Current allowlist:
 
@@ -67,7 +67,9 @@ Current allowlist:
 | JPEG | .jpg, .jpeg |
 | GIF | .gif |
 
-Binary MIME, filename extension, and file signature must agree.
+Binary MIME and filename extension must agree, and CGW performs a basic magic
+signature check. For Office OpenXML files this confirms a ZIP container; CGW is
+not an Office-format validator or malware scanner.
 
 ZIP/TAR/7z/RAR, executables, libraries, JAR/WAR, unknown binary, and macro-enabled
 Office formats are intentionally unsupported.
@@ -76,29 +78,30 @@ Office formats are intentionally unsupported.
 
 For larger binary files, avoid sending large base64 through a model/tool call.
 
-1. Codex computes the intended file's exact size and SHA-256 using its own local
-   capabilities.
-2. Call `chatgpt_create_blob_slot(filename, mime, size_bytes, sha256)`.
-3. CGW returns a short-lived `slot_id` and one private `writePath` under
+1. Call `chatgpt_create_blob_slot(filename, mime)`.
+2. CGW returns a short-lived `slot_id` and one private `writePath` under
    CGW's input inbox.
-4. Codex copies/writes only the intended bytes to that exact path.
-5. Call `chatgpt_commit_blob_slot(slot_id)`.
-6. CGW verifies exact size, SHA-256, MIME/extension, file signature, regular-file
-   status, and expiry before returning an `input_asset_id`.
+3. Codex copies/writes only the intended bytes to that exact path.
+4. Call `chatgpt_commit_blob_slot(slot_id)`.
+5. CGW checks regular-file/symlink status, expiry, size limit, extension/MIME,
+   and basic file signature, then computes SHA-256 once while staging the final
+   input asset.
 
 The slot expires after 15 minutes and is cleaned automatically. This is not an
 arbitrary path API: CGW creates the destination and never receives a
 caller-selected source path.
 
-### chatgpt_list_staged_inputs
+### CLI-only staging maintenance
 
-Lists only explicit CGW staging records. It never discovers workspace/home files.
+Listing/discarding staged inputs is intentionally kept out of the MCP tool
+catalog. Use:
 
-### chatgpt_discard_staged_input
+```text
+cgw inputs
+cgw discard-input <input_asset_id>
+```
 
-Deletes one staged input from CGW private state.
-
-It cannot remove a file from ChatGPT after that input has already been uploaded.
+This keeps maintenance operations out of Codex's routine tool-selection surface.
 
 ## Sending attachments
 
@@ -151,8 +154,9 @@ The proxy blocks credential-like filenames such as:
 - .pem / .key / .p12 / .pfx / keystore files
 - service-account-style JSON names
 
-Text staging also blocks obvious secret material such as private-key blocks and
-well-known live-token formats.
+Text staging hard-blocks actual private-key blocks. Broad token-looking strings
+are not hard-blocked because source code, documentation, and test fixtures can
+legitimately contain them. This is not a DLP scanner.
 
 This is a guardrail, not a complete data-loss-prevention system. Codex/user
 still owns the decision about what information is appropriate to upload.
@@ -162,7 +166,8 @@ still owns the decision about what information is appropriate to upload.
 Defaults:
 
 - text staging: 4 MiB per item
-- binary input: 20 MiB per item
+- base64 `stage_blob`: 1 MiB per item
+- committed binary slot: 20 MiB per item
 - one-time binary write slot: 15 minute expiry
 - combined input attachments per turn: 50 MiB
 - attachments per turn: 10
