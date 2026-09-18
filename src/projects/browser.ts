@@ -119,11 +119,24 @@ async function selectionLooksProjectOnly(scope: Locator): Promise<boolean> {
     if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
   }
 
-  const controls = scope.locator('button, [role="combobox"]');
-  const controlCount = await controls.count().catch(() => 0);
-  for (let i = 0; i < controlCount; i++) {
-    const text = (await controls.nth(i).innerText().catch(() => "")).trim();
-    if (PROJECT_ONLY_LABEL.test(text)) return true;
+  const combos = scope.locator('[role="combobox"]');
+  const comboCount = await combos.count().catch(() => 0);
+  for (let i = 0; i < comboCount; i++) {
+    const combo = combos.nth(i);
+    if (!(await combo.isVisible().catch(() => false))) continue;
+    const text = (await combo.innerText().catch(() => "")).trim();
+    const aria = (await combo.getAttribute("aria-label").catch(() => null)) ?? "";
+    if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
+  }
+
+  const dropdownTriggers = scope.locator('button[aria-haspopup="listbox"], button[aria-haspopup="menu"]');
+  const triggerCount = await dropdownTriggers.count().catch(() => 0);
+  for (let i = 0; i < triggerCount; i++) {
+    const trigger = dropdownTriggers.nth(i);
+    if (!(await trigger.isVisible().catch(() => false))) continue;
+    const text = (await trigger.innerText().catch(() => "")).trim();
+    const aria = (await trigger.getAttribute("aria-label").catch(() => null)) ?? "";
+    if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
   }
   return false;
 }
@@ -208,15 +221,7 @@ async function openProjectSettings(
     }
   }
 
-  const seen = new Set<string>();
   for (const button of candidates) {
-    const key =
-      (await button.getAttribute("aria-label").catch(() => null)) ??
-      (await button.innerText().catch(() => "")) ??
-      "";
-    if (seen.has(key)) continue;
-    seen.add(key);
-
     await button.click().catch(() => undefined);
     await page.waitForTimeout(150);
 
