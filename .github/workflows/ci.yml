@@ -22,5 +22,9 @@ jobs:
 
       - run: npm install
       - run: node bin/cgw.mjs --version
+      - name: Smoke test GitHub npx install
+        env:
+          CGW_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npx -y "github:${GITHUB_REPOSITORY}#${CGW_GIT_SHA}" --version
       - run: npm run typecheck
       - run: npm test
