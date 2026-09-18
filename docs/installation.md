@@ -5,7 +5,6 @@ Normal users do not need to clone, build, or install a Playwright browser.
 ## Requirements
 
 - Node.js 20+
-- Git
 - a ChatGPT account
 - Codex CLI, Codex UI/Desktop, or a Codex IDE integration
 - a supported browser:
@@ -29,12 +28,12 @@ https://github.com/jiho-symply/codex-chatgpt-web-mcp
 Use the normal-user install flow, not the development/source-build flow.
 Do not modify files in my current project.
 
-1. Check that Node.js >= 20, Git, and a supported Edge/Chrome/Chromium browser are available.
+1. Check that Node.js >= 20 and a supported Edge/Chrome/Chromium browser are available.
 2. Run:
-   npx -y github:jiho-symply/codex-chatgpt-web-mcp login
+   npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
    If ChatGPT login, CAPTCHA, or 2FA needs human interaction, stop and ask me to complete it in the opened browser.
 3. Register the MCP server with:
-   codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+   codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
 4. Verify registration with:
    codex mcp list
 5. Do not clone/build the repository unless the documented npx path actually fails.
@@ -54,13 +53,13 @@ human steps are:
 ### 1. Sign in once
 
 ```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp login
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz login
 ```
 
 ### 2. Register with Codex
 
 ```bash
-codex mcp add chatgpt-web -- npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp
+codex mcp add chatgpt-web -- npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp
 ```
 
 Verify:
@@ -86,7 +85,7 @@ For UI-only configuration:
 
 1. Open Settings → MCP Servers.
 2. Add a local STDIO server named `chatgpt-web`.
-3. Command: `npx -y github:jiho-symply/codex-chatgpt-web-mcp mcp`.
+3. Command: `npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz mcp`.
 4. On Windows, use `npx.cmd` if the UI cannot resolve `npx`.
 5. Save and restart the client.
 
@@ -134,13 +133,13 @@ npx playwright install chromium
 Check the saved ChatGPT session:
 
 ```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp doctor
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz doctor
 ```
 
 Inspect model/effort choices:
 
 ```bash
-npx -y github:jiho-symply/codex-chatgpt-web-mcp models
+npx -y https://github.com/jiho-symply/codex-chatgpt-web-mcp/archive/refs/heads/main.tar.gz models
 ```
 
 Remove from Codex:
