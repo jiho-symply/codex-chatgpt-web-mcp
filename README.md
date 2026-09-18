@@ -207,7 +207,8 @@ Project-only memory is visibly selected and verified. It never silently adopts
 an existing same-name Project and never falls back to a default-memory Project.
 
 After binding, pass `workspace_id` on every `chatgpt_send` /
-`chatgpt_chat` call:
+`chatgpt_chat` call. Before every workspace send, CGW reopens Project settings
+and verifies that Project-only memory is still selected:
 
 ```text
 workspace A → Project A → fresh/continued chats
