@@ -16,7 +16,9 @@ import {
   UPLOAD_BUSY_SELECTOR,
   UPLOAD_INPUT_SELECTORS,
   extractConversationId,
+  extractProjectId,
   isValidConversationId,
+  projectConversationUrl,
   normalizeText,
   truncateUtf8,
   uniqueOptions,
@@ -34,6 +36,14 @@ import {
 } from "../inputs/store.js";
 import { CHATGPT_ORIGIN, type AppConfig } from "../config.js";
 import { BrowserRuntime } from "./runtime.js";
+import {
+  WorkspaceProjectManager,
+  WorkspaceProjectError,
+} from "../projects/browser.js";
+import type {
+  ProjectNamingMode,
+  WorkspaceProjectBinding,
+} from "../projects/store.js";
 
 export type ChatGptErrorCode =
   | "AUTH_REQUIRED"
@@ -80,15 +90,19 @@ export interface BrowserDispatchRequest {
   model?: string;
   effort?: string;
   inputAssetIds?: string[];
+  workspaceId?: string;
 }
 
 export interface BrowserTurnDispatch {
   conversationId: string | null;
+  projectId: string | null;
+  workspaceId: string | null;
   baselineAssistantCount: number;
 }
 
 export interface BrowserTurnSnapshot {
   conversationId: string | null;
+  projectId: string | null;
   complete: boolean;
   paused: boolean;
   generating: boolean;
@@ -267,6 +281,7 @@ function decodeDataUrl(value: string): { bytes: Buffer; mime: string | null } {
 export class ChatGptWebClient {
   private readonly assetStore: AssetStore;
   private readonly inputStore: InputStore;
+  private readonly projectManager: WorkspaceProjectManager;
 
   constructor(
     private readonly runtime: BrowserRuntime,
@@ -274,15 +289,23 @@ export class ChatGptWebClient {
   ) {
     this.assetStore = new AssetStore(config.stateDir);
     this.inputStore = new InputStore(config.stateDir, config);
+    this.projectManager = new WorkspaceProjectManager(runtime, config);
     this.inputStore.cleanup();
   }
 
-  private async navigate(page: Page, conversationId?: string): Promise<void> {
+  private async navigate(
+    page: Page,
+    conversationId?: string,
+    projectId?: string | null
+  ): Promise<void> {
     if (conversationId !== undefined) {
       if (!isValidConversationId(conversationId)) {
         throw new Error("Invalid ChatGPT conversation id.");
       }
-      const response = await page.goto(CHATGPT_ORIGIN + "/c/" + conversationId, {
+      const target = projectId
+        ? projectConversationUrl(projectId, conversationId)
+        : CHATGPT_ORIGIN + "/c/" + conversationId;
+      const response = await page.goto(target, {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
       });
@@ -304,6 +327,12 @@ export class ChatGptWebClient {
             : "ChatGPT did not remain on the requested conversation."
         );
       }
+      if (projectId && extractProjectId(page.url()) !== projectId) {
+        throw new WorkspaceProjectError(
+          "PROJECT_DESTINATION_MISMATCH",
+          "Conversation opened outside the ChatGPT Project bound to this workspace."
+        );
+      }
       return;
     }
 
@@ -314,7 +343,11 @@ export class ChatGptWebClient {
     throwForUiState(await detectChatGptUiState(page));
   }
 
-  private async ensureConversation(page: Page, conversationId: string | null): Promise<void> {
+  private async ensureConversation(
+    page: Page,
+    conversationId: string | null,
+    projectId: string | null
+  ): Promise<void> {
     if (!conversationId) {
       const deadline = Date.now() + 5_000;
       let current = extractConversationId(page.url());
@@ -331,8 +364,11 @@ export class ChatGptWebClient {
       }
       return;
     }
-    if (extractConversationId(page.url()) === conversationId) return;
-    await this.navigate(page, conversationId);
+    if (
+      extractConversationId(page.url()) === conversationId &&
+      (!projectId || extractProjectId(page.url()) === projectId)
+    ) return;
+    await this.navigate(page, conversationId, projectId);
   }
 
   private async requireComposer(page: Page): Promise<Locator> {
@@ -350,6 +386,7 @@ export class ChatGptWebClient {
     authenticated: boolean;
     uiReady: boolean;
     conversationId: string | null;
+    projectId: string | null;
     headless: boolean;
     ui: ChatGptUiSnapshot;
   }> {
@@ -365,6 +402,7 @@ export class ChatGptWebClient {
       authenticated,
       uiReady: Boolean(composer) && ["ready", "generating", "paused"].includes(ui.state),
       conversationId: extractConversationId(page.url()),
+      projectId: extractProjectId(page.url()),
       headless: this.runtime.headless,
       ui,
     };
@@ -381,6 +419,26 @@ export class ChatGptWebClient {
       effortPicker,
       flattenedPicker: modelPicker.found && !effortPicker.found,
     };
+  }
+
+  async bindWorkspaceProject(input: {
+    workspaceId: string;
+    workspaceName?: string;
+    namingMode?: ProjectNamingMode;
+  }): Promise<WorkspaceProjectBinding> {
+    return this.projectManager.bindWorkspace(input);
+  }
+
+  listWorkspaceProjects(): WorkspaceProjectBinding[] {
+    return this.projectManager.listBindings();
+  }
+
+  getWorkspaceProject(workspaceId: string): WorkspaceProjectBinding {
+    return this.projectManager.getBinding(workspaceId);
+  }
+
+  unbindWorkspaceProject(workspaceId: string) {
+    return this.projectManager.unbind(workspaceId);
   }
 
   stageTextInput(input: { filename: string; content: string; mime?: string }): InputAssetView {
@@ -594,8 +652,36 @@ export class ChatGptWebClient {
 
     const resolvedInputs = this.inputStore.resolve(input.inputAssetIds ?? []);
 
-    const page = await this.runtime.page();
-    await this.navigate(page, input.conversationId);
+    let page: Page;
+    let expectedProjectId: string | null = null;
+    if (input.workspaceId) {
+      const binding = this.projectManager.getBinding(input.workspaceId);
+      if (binding.status !== "ready" || !binding.memoryVerifiedAt || binding.memoryMode !== "project-only") {
+        throw new WorkspaceProjectError(
+          "PROJECT_MEMORY_UNVERIFIED",
+          "Workspace ChatGPT Project is not verified for Project-only memory."
+        );
+      }
+      expectedProjectId = binding.projectId;
+      if (input.conversationId) {
+        page = await this.runtime.page();
+        await this.navigate(page, input.conversationId, expectedProjectId);
+      } else {
+        const opened = await this.projectManager.openBoundProject(input.workspaceId);
+        page = opened.page;
+      }
+    } else {
+      page = await this.runtime.page();
+      await this.navigate(page, input.conversationId);
+    }
+
+    if (expectedProjectId && extractProjectId(page.url()) !== expectedProjectId) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "Composer is not inside the ChatGPT Project bound to this workspace."
+      );
+    }
+
     const composer = await this.requireComposer(page);
     const preSendUi = await detectChatGptUiState(page);
     throwForUiState(preSendUi);
@@ -624,7 +710,20 @@ export class ChatGptWebClient {
       conversationId = extractConversationId(page.url());
     }
 
-    return { conversationId, baselineAssistantCount };
+    const landedProjectId = extractProjectId(page.url());
+    if (expectedProjectId && landedProjectId !== expectedProjectId) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "Prompt landed outside the ChatGPT Project bound to this workspace."
+      );
+    }
+
+    return {
+      conversationId,
+      projectId: landedProjectId,
+      workspaceId: input.workspaceId ?? null,
+      baselineAssistantCount,
+    };
   }
 
   private async manifestFor(
@@ -640,6 +739,7 @@ export class ChatGptWebClient {
     return extractResponseManifest({
       message: messages.nth(assistantIndex),
       conversationId,
+      projectId: extractProjectId(page.url()),
       assistantIndex,
       assetStore: this.assetStore,
     });
@@ -647,11 +747,12 @@ export class ChatGptWebClient {
 
   async inspectTurn(input: {
     conversationId: string | null;
+    projectId: string | null;
     baselineAssistantCount: number;
     timeoutMs: number;
   }): Promise<BrowserTurnSnapshot> {
     const page = await this.runtime.page();
-    await this.ensureConversation(page, input.conversationId);
+    await this.ensureConversation(page, input.conversationId, input.projectId);
 
     const deadline = Date.now() + Math.max(0, input.timeoutMs);
     let lastText = "";
@@ -690,6 +791,7 @@ export class ChatGptWebClient {
         const bounded = truncateUtf8(response ?? "", this.config.maxResponseBytes);
         return {
           conversationId: extractConversationId(page.url()) ?? input.conversationId,
+          projectId: extractProjectId(page.url()) ?? input.projectId,
           complete,
           paused,
           generating: !complete && !paused,
@@ -717,6 +819,7 @@ export class ChatGptWebClient {
     const bounded = truncateUtf8(response ?? "", this.config.maxResponseBytes);
     return {
       conversationId: extractConversationId(page.url()) ?? input.conversationId,
+      projectId: extractProjectId(page.url()) ?? input.projectId,
       complete: false,
       paused: ui.state === "paused",
       generating: ui.state === "generating" || Boolean(response),
@@ -730,6 +833,7 @@ export class ChatGptWebClient {
 
   async stopTurn(input: {
     conversationId: string | null;
+    projectId: string | null;
     baselineAssistantCount: number;
   }): Promise<BrowserTurnSnapshot> {
     const page = await this.runtime.page();
@@ -744,6 +848,7 @@ export class ChatGptWebClient {
     }
     return this.inspectTurn({
       conversationId: extractConversationId(page.url()) ?? input.conversationId,
+      projectId: extractProjectId(page.url()) ?? input.projectId,
       baselineAssistantCount: input.baselineAssistantCount,
       timeoutMs: 0,
     });
@@ -869,7 +974,7 @@ export class ChatGptWebClient {
       return saved;
     } catch (error) {
       if (page.url() !== beforeUrl) {
-        await this.navigate(page, record.conversationId).catch(() => undefined);
+        await this.navigate(page, record.conversationId, record.projectId ?? null).catch(() => undefined);
       }
       throw error;
     }
@@ -878,7 +983,7 @@ export class ChatGptWebClient {
   async getAsset(assetId: string): Promise<SavedAsset> {
     const record = this.assetStore.get(assetId);
     const page = await this.runtime.page();
-    await this.navigate(page, record.conversationId);
+    await this.navigate(page, record.conversationId, record.projectId ?? null);
 
     const messages = page.locator(ASSISTANT_MESSAGE_SELECTOR);
     if ((await messages.count()) <= record.assistantIndex) {
