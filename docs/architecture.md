@@ -44,8 +44,10 @@ The server is responsible only for:
 - fixed-origin navigation
 - conversation reuse
 - live model/effort picker discovery
-- prompt submission
-- generation completion detection
+- idempotent prompt dispatch
+- persistent local turn metadata
+- bounded generation polling and timeout recovery
+- stronger generation completion detection
 - response extraction
 
 ### ChatGPT Web
@@ -81,6 +83,31 @@ This prevents:
 - model selection from one request affecting another
 - prompts landing in the wrong conversation
 - response extraction races
+
+## Turn lifecycle
+
+A prompt is not tied to one long MCP call.
+
+```text
+request_id
+   │ reserve locally (prompt body is not persisted)
+   ▼
+chatgpt_send ──▶ turn_id / generating
+                    │
+             ┌──────┴────────┐
+             ▼               ▼
+       chatgpt_wait     chatgpt_get_reply
+             │               │
+             └──────┬────────┘
+                    ▼
+          completed / stopped / error
+```
+
+The request id is persisted before browser dispatch. This intentionally favors
+at-most-once delivery: after an ambiguous crash window the proxy will not
+silently send the same prompt again.
+
+See [reliability.md](reliability.md).
 
 ## Model selection
 
