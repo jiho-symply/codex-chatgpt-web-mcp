@@ -5,6 +5,8 @@ import type {
   BrowserTurnSnapshot,
 } from "../browser/chatgpt.js";
 import { ChatGptWebError } from "../browser/chatgpt.js";
+import type { ResponseManifest } from "../browser/response-extractor.js";
+import type { ChatGptUiSnapshot } from "../browser/ui-state.js";
 import {
   payloadHash,
   TurnStore,
@@ -45,6 +47,8 @@ export interface TurnView {
   paused?: boolean;
   timedOut?: boolean;
   lastErrorCode?: string | null;
+  manifest?: ResponseManifest | null;
+  ui?: ChatGptUiSnapshot;
   requestedModel: string | null;
   requestedEffort: string | null;
 }
@@ -126,6 +130,8 @@ export class TurnManager {
       responseBytes: snapshot.responseBytes,
       truncated: snapshot.truncated,
       paused: snapshot.paused,
+      manifest: snapshot.manifest,
+      ui: snapshot.ui,
     });
   }
 
@@ -181,6 +187,8 @@ export class TurnManager {
       response: snapshot.response,
       responseBytes: snapshot.responseBytes,
       truncated: snapshot.truncated,
+      manifest: snapshot.manifest,
+      ui: snapshot.ui,
     });
   }
 
