@@ -1,0 +1,32 @@
+{
+  "name": "codex-chatgpt-web-mcp",
+  "version": "0.1.0",
+  "description": "A secure browser-backed MCP server that lets Codex use ChatGPT Web without exposing the workspace to ChatGPT.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "cgw": "./dist/cli.js",
+    "codex-chatgpt-web-mcp": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^14.0.0",
+    "playwright": "^1.55.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
