@@ -35,6 +35,8 @@ function config(stateDir: string): AppConfig {
     maxInputAttachments: 10,
     inputTtlMs: 24 * 60 * 60 * 1000,
     requireWorkspaceProject: true,
+    e2eRemoteSendIntervalMs: 0,
+    e2ePreflightSettleMs: 0,
   };
 }
 
@@ -332,6 +334,175 @@ describe("autonomous E2E runner", () => {
     expect(latest.tests.find((test) => test.id === "I1")?.status).toBe("NOT_RUN");
     expect(latest.tests.find((test) => test.id === "H1")?.status).toBe("PASS");
     expect(latest.tests.find((test) => test.id === "H2")?.status).toBe("PASS");
+  });
+
+  it("persists a remote-send cooldown across runner instances", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cgw-e2e-"));
+    dirs.push(stateDir);
+
+    const pacingConfig = {
+      ...config(stateDir),
+      e2eRemoteSendIntervalMs: 120,
+      e2ePreflightSettleMs: 0,
+    };
+
+    fs.mkdirSync(path.join(stateDir, "e2e"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "e2e", "remote-pacing.json"),
+      JSON.stringify({
+        version: 1,
+        lastRemoteAttemptAt: new Date().toISOString(),
+        runId: "e2e_previous000000",
+      })
+    );
+
+    const projectId = "g-p-0123456789abcdef";
+    const fakeClient = {
+      async status() {
+        return {
+          authenticated: true,
+          uiReady: true,
+          conversationId: null,
+          projectId: null,
+          headless: false,
+          ui: {
+            state: "ready",
+            message: null,
+            actions: { stop: false, continue: false, retry: false, regenerate: false },
+          },
+        };
+      },
+      async bindWorkspaceProject() {
+        const now = new Date().toISOString();
+        return {
+          workspaceId: "ws_0123456789abcdef",
+          workspaceName: "CGW-E2E-Test",
+          namingMode: "workspace-name",
+          projectId,
+          projectName: "CGW-CGW-E2E-Test · 012345",
+          projectUrl: "https://chatgpt.com/g/" + projectId + "/project",
+          memoryMode: "project-only",
+          memoryVerifiedAt: now,
+          memoryVerificationSource: "creation",
+          status: "ready",
+          createdAt: now,
+          updatedAt: now,
+        };
+      },
+      async capabilities() {
+        return {
+          modelPicker: { found: true, current: "GPT-X", options: ["GPT-X"] },
+          effortPicker: { found: false, current: null, options: [] },
+          flattenedPicker: true,
+        };
+      },
+      stageTextInput() {
+        return {
+          inputAssetId: "input_0123456789abcdef01234567",
+          kind: "text",
+          filename: "cgw-e2e-sentinel.txt",
+          mime: "text/plain",
+          sizeBytes: 24,
+          sha256: "0".repeat(64),
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          status: "staged",
+        };
+      },
+      discardStagedInput(inputAssetId: string) {
+        return { inputAssetId, discarded: true };
+      },
+    } as unknown as ChatGptWebClient;
+
+    const responses = new Map<string, TurnView>();
+    const requests = new Map<string, string>();
+    let firstDispatchAt = 0;
+    const fakeTurns = {
+      async send(input: {
+        requestId: string;
+        prompt: string;
+        workspaceId?: string;
+        inputAssetIds?: string[];
+        model?: string;
+        effort?: string;
+      }) {
+        if (!input.workspaceId) {
+          const error = new Error("workspace required") as Error & { code?: string };
+          error.code = "WORKSPACE_REQUIRED";
+          throw error;
+        }
+        const existing = requests.get(input.requestId);
+        if (existing) {
+          const turn = responses.get(existing)!;
+          return { ...turn, status: "generating", deduplicated: true };
+        }
+        firstDispatchAt = Date.now();
+        const turnId = "turn_111111111111111111111111";
+        requests.set(input.requestId, turnId);
+        const response =
+          "ATTACHMENT_SENTINEL_7F3A\n\n```python\nprint('CGW')\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |";
+        const turn = {
+          ...completed(turnId, input.requestId, projectId, response, {
+            version: 1,
+            plainText: response,
+            parts: [
+              { type: "text", text: "ATTACHMENT_SENTINEL_7F3A" },
+              { type: "code", language: "python", text: "print('CGW')" },
+              {
+                type: "table",
+                headers: ["A", "B"],
+                rows: [["1", "2"]],
+                markdown: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+              },
+            ],
+            assistantIndex: 0,
+            structured: true,
+            assetCount: 0,
+            codeBlockCount: 1,
+          }),
+          requestedModel: input.model ?? null,
+          requestedEffort: input.effort ?? null,
+        };
+        responses.set(turnId, turn);
+        return { ...turn, status: "generating", response: undefined, manifest: undefined, deduplicated: false };
+      },
+      async getReply(turnId: string) {
+        const turn = responses.get(turnId);
+        if (!turn) {
+          const error = new Error("unknown turn") as Error & { code?: string };
+          error.code = "TURN_NOT_FOUND";
+          throw error;
+        }
+        return turn;
+      },
+      async wait(turnId: string) {
+        return this.getReply(turnId);
+      },
+    } as unknown as TurnManager;
+
+    const startAt = Date.now();
+    const runner = new E2ERunner(fakeClient, fakeTurns, pacingConfig, async (fn) => fn());
+    const started = runner.start({
+      workspaceId: "ws_0123456789abcdef",
+      workspaceName: "CGW-E2E-Test",
+      includeSelection: true,
+    });
+
+    let latest = runner.status(started.runId);
+    const deadline = Date.now() + 3_000;
+    while (latest.status === "running" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      latest = runner.status(started.runId);
+    }
+
+    expect(latest.status).toBe("completed");
+    expect(firstDispatchAt - startAt).toBeGreaterThanOrEqual(80);
+    expect(latest.tests.find((test) => test.id === "P1")?.status).toBe("PASS");
+
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(stateDir, "e2e", "remote-pacing.json"), "utf8")
+    ) as { runId?: string };
+    expect(persisted.runId).toBe(started.runId);
   });
 
   it("stops early and persists BLOCKED when human authentication is required", async () => {
