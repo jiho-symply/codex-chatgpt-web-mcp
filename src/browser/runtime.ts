@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createServer } from "node:net";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import type { AppConfig } from "../config.js";
 import { ProfileLock } from "./profile-lock.js";
 
@@ -208,22 +209,130 @@ function isProfileBusyError(message: string): boolean {
   return /already in use|profile.*use/i.test(message);
 }
 
+async function freeLoopbackPort(preferred?: number): Promise<number> {
+  if (preferred) return preferred;
+  return new Promise<number>((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close();
+        reject(new Error("Could not allocate a loopback CDP port."));
+        return;
+      }
+      const port = address.port;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+async function waitForCdpEndpoint(port: number, timeoutMs = 20_000): Promise<string> {
+  const endpoint = "http://127.0.0.1:" + port;
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(endpoint + "/json/version");
+      if (response.ok) return endpoint;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(
+    "Chrome did not expose its local CDP endpoint at " +
+      endpoint +
+      (lastError instanceof Error ? ": " + lastError.message : ".")
+  );
+}
+
 export class BrowserRuntime {
+  private browser: Browser | null = null;
   private context: BrowserContext | null = null;
+  private browserProcess: ChildProcess | null = null;
   private lock: ProfileLock | null = null;
 
   constructor(private readonly config: AppConfig) {}
 
   get headless(): boolean {
-    return this.config.headless;
+    return this.config.browserMode === "system-cdp" ? false : this.config.headless;
   }
 
-  async start(): Promise<BrowserContext> {
-    if (this.context) return this.context;
+  private releaseLock(): void {
+    const lock = this.lock;
+    this.lock = null;
+    lock?.release();
+  }
+
+  private clearConnectedState(browser?: Browser): void {
+    if (!browser || this.browser === browser) {
+      this.browser = null;
+      this.context = null;
+    }
+    this.browserProcess = null;
+    this.releaseLock();
+  }
+
+  private async startSystemCdp(): Promise<BrowserContext> {
+    this.lock = ProfileLock.acquire(this.config.profileDir);
+
+    const candidate = browserLaunchCandidates(this.config).find((item) => item.executablePath);
+    if (!candidate?.executablePath) {
+      throw new BrowserRuntimeError(
+        "BROWSER_NOT_INSTALLED",
+        "System-CDP mode requires an installed Chrome/Edge executable. " +
+          "Set CGW_BROWSER_EXECUTABLE to an absolute browser path if auto-detection fails."
+      );
+    }
+
+    const port = await freeLoopbackPort(this.config.cdpPort);
+    const args = [
+      "--user-data-dir=" + this.config.profileDir,
+      "--remote-debugging-port=" + port,
+      "--remote-debugging-address=127.0.0.1",
+      CHATGPT_ORIGIN,
+    ];
 
     try {
-      this.lock = ProfileLock.acquire(this.config.profileDir);
+      const child = spawn(candidate.executablePath, args, {
+        stdio: "ignore",
+        windowsHide: false,
+      });
+      this.browserProcess = child;
+      child.once("exit", () => {
+        if (this.browserProcess === child) this.browserProcess = null;
+      });
+      child.once("error", () => {
+        if (this.browserProcess === child) this.browserProcess = null;
+      });
 
+      const endpoint = await waitForCdpEndpoint(port);
+      const browser = await chromium.connectOverCDP(endpoint, { timeout: 30_000 });
+      const context = browser.contexts()[0];
+      if (!context) {
+        await browser.close().catch(() => undefined);
+        throw new Error("Connected Chrome did not expose its default browser context.");
+      }
+
+      this.browser = browser;
+      this.context = context;
+      context.setDefaultTimeout(15_000);
+      browser.once("disconnected", () => this.clearConnectedState(browser));
+      return context;
+    } catch (error) {
+      this.browserProcess?.kill();
+      this.browserProcess = null;
+      this.releaseLock();
+      throw error;
+    }
+  }
+
+  private async startPlaywright(): Promise<BrowserContext> {
+    this.lock = ProfileLock.acquire(this.config.profileDir);
+
+    try {
       const attempted: string[] = [];
       for (const candidate of browserLaunchCandidates(this.config)) {
         attempted.push(candidate.label);
@@ -272,8 +381,7 @@ export class BrowserRuntime {
           "You can also set CGW_BROWSER_CHANNEL or CGW_BROWSER_EXECUTABLE."
       );
     } catch (error) {
-      this.lock?.release();
-      this.lock = null;
+      this.releaseLock();
       if (error instanceof BrowserRuntimeError) throw error;
 
       const message = error instanceof Error ? error.message : String(error);
@@ -288,6 +396,13 @@ export class BrowserRuntime {
       }
       throw error;
     }
+  }
+
+  async start(): Promise<BrowserContext> {
+    if (this.context) return this.context;
+    return this.config.browserMode === "system-cdp"
+      ? this.startSystemCdp()
+      : this.startPlaywright();
   }
 
   async newPage(): Promise<Page> {
@@ -312,13 +427,24 @@ export class BrowserRuntime {
   }
 
   async close(): Promise<void> {
+    const browser = this.browser;
     const context = this.context;
+    const child = this.browserProcess;
+    this.browser = null;
     this.context = null;
+    this.browserProcess = null;
+
     try {
-      if (context) await context.close();
+      if (browser) {
+        await browser.close().catch(() => undefined);
+      } else if (context) {
+        await context.close().catch(() => undefined);
+      }
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill();
+      }
     } finally {
-      this.lock?.release();
-      this.lock = null;
+      this.releaseLock();
     }
   }
 }
