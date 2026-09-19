@@ -5,6 +5,7 @@ import {
   ASSISTANT_MESSAGE_SELECTOR,
   ATTACH_BUTTON_SELECTORS,
   ATTACHMENT_CHIP_SELECTOR,
+  ATTACHMENT_REMOVE_SELECTOR,
   EFFORT_PICKER_SELECTORS,
   FILE_ASSET_SELECTOR,
   IMAGE_ASSET_SELECTOR,
@@ -348,6 +349,68 @@ async function selectExact(
   } finally {
     await page.keyboard.press("Escape").catch(() => undefined);
   }
+}
+
+interface AttachmentAcceptanceSnapshot {
+  present: string[];
+  attachedFiles: number;
+  uploading: boolean;
+  chipCount: number;
+  sendReady: boolean;
+}
+
+async function attachmentAcceptanceSnapshot(
+  page: Page,
+  filenames: string[],
+  scope: Locator
+): Promise<AttachmentAcceptanceSnapshot> {
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+  const attributeText = await page
+    .locator("[aria-label],[title],[alt]")
+    .evaluateAll((nodes) =>
+      nodes
+        .map(
+          (node) =>
+            node.getAttribute("aria-label") ??
+            node.getAttribute("title") ??
+            node.getAttribute("alt") ??
+            ""
+        )
+        .join("\n")
+    )
+    .catch(() => "");
+
+  const haystack = bodyText + "\n" + attributeText;
+  const present = filenames.filter((filename) => haystack.includes(filename));
+
+  const attachedFiles = await page
+    .locator('input[type="file"]')
+    .evaluateAll((nodes) =>
+      nodes.reduce(
+        (total, node) =>
+          total + ((node as HTMLInputElement).files?.length ?? 0),
+        0
+      )
+    )
+    .catch(() => 0);
+
+  const uploading = await page
+    .locator(UPLOAD_BUSY_SELECTOR + ', [role="progressbar"]')
+    .filter({ visible: true })
+    .first()
+    .isVisible()
+    .catch(() => false);
+
+  const chipCount = await scope
+    .locator(ATTACHMENT_CHIP_SELECTOR)
+    .count()
+    .catch(() => 0);
+
+  const sendReady = await firstVisible(page, SEND_BUTTON_SELECTORS)
+    .then((button) => button?.isEnabled().catch(() => false) ?? false)
+    .catch(() => false);
+
+  return { present, attachedFiles, uploading, chipCount, sendReady };
 }
 
 async function messageHasCopyButton(message: Locator): Promise<boolean> {
@@ -698,39 +761,32 @@ export class ChatGptWebClient {
     const filenames = assets.map((asset) => asset.record.filename);
     await uploadInput.setInputFiles(paths);
 
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + 60_000;
     let confirmedSince: number | null = null;
+    let last: AttachmentAcceptanceSnapshot = {
+      present: [],
+      attachedFiles: 0,
+      uploading: false,
+      chipCount: beforeChips,
+      sendReady: false,
+    };
+
     while (Date.now() < deadline) {
       const ui = await detectChatGptUiState(page);
       throwForUiState(ui);
 
       const scope = await this.composerScope(page);
-      let named = 0;
-      for (const filename of filenames) {
-        const visible = await scope
-          .getByText(filename, { exact: true })
-          .last()
-          .isVisible()
-          .catch(() => false);
-        if (visible) named++;
-      }
+      last = await attachmentAcceptanceSnapshot(page, filenames, scope);
 
-      const chipCount = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
-      const busy = await scope.locator(UPLOAD_BUSY_SELECTOR).first().isVisible().catch(() => false);
-      const fileCount = await uploadInput
-        .evaluate((node) => (node as HTMLInputElement).files?.length ?? 0)
-        .catch(() => 0);
-      const sendReady = await firstVisible(page, SEND_BUTTON_SELECTORS)
-        .then((button) => button?.isEnabled().catch(() => false) ?? false)
-        .catch(() => false);
+      // The filename appearing in body text or accessibility metadata is the
+      // strongest current ChatGPT acceptance signal. React may replace the
+      // original file input after processing, so input.files alone is
+      // diagnostic only and must never authorize a send.
+      const filenameEvidence = last.present.length === filenames.length;
+      const chipEvidence =
+        last.chipCount >= beforeChips + filenames.length;
 
-      const strongEvidence =
-        named === filenames.length ||
-        chipCount >= beforeChips + filenames.length;
-      const fallbackEvidence =
-        fileCount === filenames.length && sendReady;
-
-      if ((strongEvidence || fallbackEvidence) && !busy) {
+      if ((filenameEvidence || chipEvidence) && !last.uploading) {
         confirmedSince ??= Date.now();
         if (Date.now() - confirmedSince >= 750) {
           throwForUiState(await detectChatGptUiState(page));
@@ -742,9 +798,27 @@ export class ChatGptWebClient {
       await page.waitForTimeout(250);
     }
 
+    // A failed attachment can leave ChatGPT's composer wedged for future
+    // uploads. Best-effort reload resets that transient composer state while
+    // preserving the persistent browser session/project URL.
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(
+      () => undefined
+    );
+
     throw new ChatGptWebError(
       "UPLOAD_UNCONFIRMED",
-      "ChatGPT did not expose a stable attachment state before the upload timeout; prompt was not sent."
+      "ChatGPT did not expose a stable attachment state before the upload timeout; prompt was not sent. " +
+        "Last evidence: present=" +
+        JSON.stringify(last.present) +
+        ", attachedFiles=" +
+        last.attachedFiles +
+        ", chipCount=" +
+        last.chipCount +
+        ", uploading=" +
+        last.uploading +
+        ", sendReady=" +
+        last.sendReady +
+        "."
     );
   }
 
@@ -795,6 +869,12 @@ export class ChatGptWebClient {
 
   private async uploadInputs(page: Page, assets: ResolvedInputAsset[]): Promise<void> {
     if (assets.length === 0) return;
+
+    const stale = page.locator(ATTACHMENT_REMOVE_SELECTOR).filter({ visible: true });
+    if ((await stale.count().catch(() => 0)) > 0) {
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
+      await this.requireComposer(page);
+    }
 
     const ui = await detectChatGptUiState(page);
     throwForUiState(ui);
