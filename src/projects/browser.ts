@@ -54,6 +54,10 @@ const PROJECT_ONLY_LABEL =
 const MORE_OPTIONS_LABEL = /more options|advanced|추가 옵션|고급/i;
 const CREATE_PROJECT_LABEL =
   /create project|create|프로젝트 만들기|프로젝트 생성|생성/i;
+const PROJECT_SETTINGS_LABEL = /project settings|프로젝트 설정/i;
+const PROJECT_OPTIONS_LABEL =
+  /project options|project menu|more options|more|프로젝트 옵션|프로젝트 메뉴|더보기/i;
+const SAVE_LABEL = /^(save|저장)$/i;
 
 async function firstVisible(
   scope: Page | Locator,
@@ -224,6 +228,236 @@ function explicitComposerProjectName(label: string): string | null {
 function sameDisplayName(a: string, b: string): boolean {
   return a.replace(/\s+/g, " ").trim().toLocaleLowerCase() ===
     b.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
+
+async function visibleNewProjectControl(page: Page): Promise<Locator | null> {
+  const exact = await firstVisible(page, NEW_PROJECT_SELECTORS);
+  if (exact) return exact;
+
+  const controls = page.locator('button,[role="button"]');
+  const count = await controls.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    const control = controls.nth(i);
+    if (!(await control.isVisible().catch(() => false))) continue;
+    const label = [
+      await control.innerText().catch(() => ""),
+      (await control.getAttribute("aria-label").catch(() => null)) ?? "",
+    ]
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (/new project|새 프로젝트/i.test(label)) return control;
+  }
+  return null;
+}
+
+async function waitForProjectNameInput(
+  page: Page,
+  visibleBefore: number,
+  timeoutMs = 5_000
+): Promise<Locator> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const named = await firstVisible(page, PROJECT_NAME_INPUT_SELECTORS);
+    if (named) return named;
+
+    const textInputs = page.locator('input[type="text"]:visible');
+    const count = await textInputs.count().catch(() => 0);
+    if (count > visibleBefore) return textInputs.last();
+
+    await page.waitForTimeout(100);
+  }
+  throw new WorkspaceProjectError(
+    "PROJECT_CREATE_FAILED",
+    "New Project popover did not expose a visible project-name input."
+  );
+}
+
+async function projectRowForId(
+  page: Page,
+  projectId: string,
+  projectName: string
+): Promise<Locator | null> {
+  const links = page.locator('a[href*="/g/g-p-"]');
+  const count = await links.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    const link = links.nth(i);
+    if (!(await link.isVisible().catch(() => false))) continue;
+    const href = await link.getAttribute("href").catch(() => null);
+    if (canonicalProjectIdFromHref(href) !== projectId) continue;
+    for (const xpath of [
+      "xpath=ancestor::*[self::li or @role='treeitem' or @role='listitem' or @data-sidebar-item='true'][1]",
+      "xpath=..",
+    ]) {
+      const row = link.locator(xpath);
+      if ((await row.count().catch(() => 0)) > 0) return row.first();
+    }
+    return link;
+  }
+
+  const exactName = page.getByText(projectName, { exact: true });
+  const nameCount = await exactName.count().catch(() => 0);
+  for (let i = 0; i < nameCount; i++) {
+    const node = exactName.nth(i);
+    if (!(await node.isVisible().catch(() => false))) continue;
+    for (const xpath of [
+      "xpath=ancestor::*[self::li or @role='treeitem' or @role='listitem' or @data-sidebar-item='true'][1]",
+      "xpath=..",
+    ]) {
+      const row = node.locator(xpath);
+      if ((await row.count().catch(() => 0)) > 0) return row.first();
+    }
+  }
+  return null;
+}
+
+async function waitForProjectSettingsScope(
+  page: Page,
+  timeoutMs = 5_000
+): Promise<Locator> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const dialogs = page.getByRole("dialog");
+    const count = await dialogs.count().catch(() => 0);
+    for (let i = count - 1; i >= 0; i--) {
+      const dialog = dialogs.nth(i);
+      if (!(await dialog.isVisible().catch(() => false))) continue;
+      const text = await dialog.innerText().catch(() => "");
+      if (/project settings|프로젝트 설정|memory|메모리/i.test(text)) return dialog;
+    }
+
+    const heading = page.getByText(PROJECT_SETTINGS_LABEL).last();
+    if (await heading.isVisible().catch(() => false)) {
+      for (const xpath of [
+        "xpath=ancestor::*[@role='dialog'][1]",
+        "xpath=ancestor::form[1]",
+        "xpath=ancestor::main[1]",
+      ]) {
+        const scope = heading.locator(xpath);
+        if ((await scope.count().catch(() => 0)) > 0) return scope.first();
+      }
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new WorkspaceProjectError(
+    "PROJECT_MEMORY_UNAVAILABLE",
+    "Project settings did not expose a usable settings surface."
+  );
+}
+
+async function openProjectSettings(
+  page: Page,
+  projectId: string,
+  projectName: string
+): Promise<Locator> {
+  const direct = page.getByRole("button", { name: PROJECT_SETTINGS_LABEL }).first();
+  if (await direct.isVisible().catch(() => false)) {
+    await direct.click();
+    return waitForProjectSettingsScope(page);
+  }
+
+  let menuButton: Locator | null = null;
+  const row = await projectRowForId(page, projectId, projectName);
+  if (row) {
+    for (const selector of [
+      'button[aria-haspopup="menu"]',
+      "button[data-trailing-button]",
+      'button[aria-label*="more" i]',
+      'button[aria-label*="더보기"]',
+    ]) {
+      const candidates = row.locator(selector);
+      const count = await candidates.count().catch(() => 0);
+      for (let i = count - 1; i >= 0; i--) {
+        const candidate = candidates.nth(i);
+        if (await candidate.isVisible().catch(() => false)) {
+          menuButton = candidate;
+          break;
+        }
+      }
+      if (menuButton) break;
+    }
+  }
+
+  if (!menuButton) {
+    const buttons = page.getByRole("button");
+    const count = await buttons.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const button = buttons.nth(i);
+      if (!(await button.isVisible().catch(() => false))) continue;
+      const label =
+        ((await button.getAttribute("aria-label").catch(() => null)) ?? "") +
+        " " +
+        (await button.innerText().catch(() => ""));
+      if (PROJECT_OPTIONS_LABEL.test(label)) {
+        menuButton = button;
+        break;
+      }
+    }
+  }
+
+  if (!menuButton) {
+    throw new WorkspaceProjectError(
+      "PROJECT_MEMORY_UNAVAILABLE",
+      "Could not find the current Project's options menu."
+    );
+  }
+
+  await menuButton.click();
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    for (const role of ["menuitem", "button"] as const) {
+      const settings = page.getByRole(role, { name: PROJECT_SETTINGS_LABEL }).last();
+      if (await settings.isVisible().catch(() => false)) {
+        await settings.click();
+        return waitForProjectSettingsScope(page);
+      }
+    }
+    const text = page.getByText(PROJECT_SETTINGS_LABEL).last();
+    if (await text.isVisible().catch(() => false)) {
+      await text.click();
+      return waitForProjectSettingsScope(page);
+    }
+    await page.waitForTimeout(100);
+  }
+
+  throw new WorkspaceProjectError(
+    "PROJECT_MEMORY_UNAVAILABLE",
+    "The Project options menu did not expose Project settings."
+  );
+}
+
+async function configureProjectOnlyMemoryFromSettings(
+  page: Page,
+  projectId: string,
+  projectName: string
+): Promise<void> {
+  const settings = await openProjectSettings(page, projectId, projectName);
+  await selectProjectOnlyMemory(page, settings);
+
+  if (!(await selectionLooksProjectOnly(settings))) {
+    throw new WorkspaceProjectError(
+      "PROJECT_MEMORY_UNVERIFIED",
+      "Project-only memory was selected but could not be verified in Project settings."
+    );
+  }
+
+  const save = settings.getByRole("button", { name: SAVE_LABEL }).last();
+  if (!(await save.isVisible().catch(() => false))) {
+    throw new WorkspaceProjectError(
+      "PROJECT_MEMORY_UNVERIFIED",
+      "Project settings did not expose a Save action after selecting Project-only memory."
+    );
+  }
+  if (!(await save.isEnabled().catch(() => false))) {
+    throw new WorkspaceProjectError(
+      "PROJECT_MEMORY_UNVERIFIED",
+      "Project settings Save action is disabled after selecting Project-only memory."
+    );
+  }
+
+  await save.click();
+  await page.waitForTimeout(300);
 }
 
 export class WorkspaceProjectManager {
@@ -430,13 +664,7 @@ export class WorkspaceProjectManager {
     });
 
     const page = await this.rootPage();
-    let newProject = await firstVisible(page, NEW_PROJECT_SELECTORS);
-    if (!newProject) {
-      const fallback = page
-        .getByRole("button", { name: /new project|새 프로젝트/i })
-        .first();
-      if (await fallback.isVisible().catch(() => false)) newProject = fallback;
-    }
+    const newProject = await visibleNewProjectControl(page);
     if (!newProject) {
       throw new WorkspaceProjectError(
         "PROJECT_CREATE_UNAVAILABLE",
@@ -444,49 +672,22 @@ export class WorkspaceProjectManager {
       );
     }
 
-    await newProject.click();
-    const dialog = await waitForProjectCreationScope(page);
+    const textInputsBefore = await page
+      .locator('input[type="text"]:visible')
+      .count()
+      .catch(() => 0);
+    await newProject.press("Enter").catch(() => newProject.click({ force: true }));
 
-    let nameInput = await firstVisible(dialog, PROJECT_NAME_INPUT_SELECTORS);
-    if (!nameInput) {
-      const textboxes = dialog.getByRole("textbox");
-      const count = await textboxes.count().catch(() => 0);
-      for (let i = 0; i < count; i++) {
-        const box = textboxes.nth(i);
-        if (await box.isVisible().catch(() => false)) {
-          nameInput = box;
-          break;
-        }
-      }
-    }
-    if (!nameInput) {
+    const nameInput = await waitForProjectNameInput(page, textInputsBefore);
+    await nameInput.fill(projectName);
+    if ((await nameInput.inputValue().catch(() => "")) !== projectName) {
       throw new WorkspaceProjectError(
         "PROJECT_CREATE_FAILED",
-        "New Project dialog has no visible name input."
+        "Could not confirm the project name before creation."
       );
     }
 
-    await nameInput.fill(projectName);
-    await selectProjectOnlyMemory(page, dialog);
-
-    let create = dialog
-      .getByRole("button", { name: CREATE_PROJECT_LABEL })
-      .last();
-    if (!(await create.isVisible().catch(() => false))) {
-      create = dialog.locator('button[type="submit"]').last();
-    }
-
-    if (await create.isVisible().catch(() => false)) {
-      if (!(await create.isEnabled().catch(() => false))) {
-        throw new WorkspaceProjectError(
-          "PROJECT_CREATE_FAILED",
-          "Project create button is disabled."
-        );
-      }
-      await create.click();
-    } else {
-      await nameInput.press("Enter");
-    }
+    await nameInput.press("Enter");
 
     const deadline = Date.now() + 15_000;
     let projectId: string | null = null;
@@ -502,6 +703,8 @@ export class WorkspaceProjectManager {
       );
     }
 
+    await configureProjectOnlyMemoryFromSettings(page, projectId, projectName);
+
     const now = new Date().toISOString();
     const binding: WorkspaceProjectBinding = {
       workspaceId,
@@ -512,7 +715,7 @@ export class WorkspaceProjectManager {
       projectUrl: projectHomeUrl(projectId),
       memoryMode: "project-only",
       memoryVerifiedAt: now,
-      memoryVerificationSource: "creation",
+      memoryVerificationSource: "settings",
       status: "ready",
       createdAt: now,
       updatedAt: now,
