@@ -120,6 +120,7 @@ Codex ── MCP / stdio ──▶ CGW ── browser ──▶ ChatGPT Web
 - [Input attachments](docs/input-attachments.md)
 - [Structured responses](docs/response-manifest.md)
 - [Reliability / async turns](docs/reliability.md)
+- [Autonomous E2E testing](docs/e2e.md)
 - [Security](SECURITY.md)
 
 ## 기타
