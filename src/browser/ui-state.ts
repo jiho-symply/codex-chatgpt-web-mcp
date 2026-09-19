@@ -48,13 +48,38 @@ async function loginVisible(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
+export function isRateLimitMessage(value: string): boolean {
+  return /rate limit|too many requests|too many messages|too many chats|usage limit|message limit|conversation limit|try again later|messages? too (?:frequently|quickly)|sending (?:messages|requests) too (?:frequently|quickly)|잠시 후 다시|사용량 한도|메시지 한도|채팅.*너무 자주|메시지.*너무 자주|너무 자주.*(?:채팅|메시지)/i.test(
+    value
+  );
+}
+
 async function challengeVisible(page: Page): Promise<boolean> {
   const url = page.url().toLowerCase();
   if (url.includes("/cdn-cgi/") || url.includes("challenge")) return true;
+
   const title = (await page.title().catch(() => "")).toLowerCase();
-  if (title.includes("just a moment")) return true;
+  if (
+    title.includes("just a moment") ||
+    title.includes("security verification") ||
+    title.includes("verify you are human")
+  ) {
+    return true;
+  }
+
+  const challengeFrame = page.locator(
+    [
+      'iframe[src*="challenges.cloudflare.com"]',
+      'iframe[title*="challenge" i]',
+      'iframe[title*="verification" i]',
+    ].join(", ")
+  );
+  if ((await challengeFrame.count().catch(() => 0)) > 0) return true;
+
   return page
-    .getByText(/verify you are human|checking your browser|사람인지 확인/i)
+    .getByText(
+      /verify you are human|checking your browser|security verification|enable javascript and cookies|사람인지 확인|보안 확인/i
+    )
     .first()
     .isVisible()
     .catch(() => false);
@@ -82,7 +107,7 @@ export async function detectChatGptUiState(page: Page): Promise<ChatGptUiSnapsho
     await page.locator(GLOBAL_ERROR_SELECTOR).allInnerTexts().catch(() => [])
   );
   const joined = alerts.join(" | ");
-  if (/rate limit|too many requests|usage limit|try again later|잠시 후 다시/i.test(joined)) {
+  if (isRateLimitMessage(joined)) {
     return { state: "rate_limited", message: joined || "ChatGPT rate limit reached.", actions };
   }
   if (/something went wrong|network error|오류가 발생|문제가 발생/i.test(joined) || retry) {

@@ -5,9 +5,14 @@ import {
   ASSISTANT_MESSAGE_SELECTOR,
   ATTACH_BUTTON_SELECTORS,
   ATTACHMENT_CHIP_SELECTOR,
+  ATTACHMENT_REMOVE_SELECTOR,
   EFFORT_PICKER_SELECTORS,
   FILE_ASSET_SELECTOR,
   IMAGE_ASSET_SELECTOR,
+  INTELLIGENCE_EFFORT_SLIDER_SELECTOR,
+  INTELLIGENCE_MENU_SELECTOR,
+  INTELLIGENCE_MODEL_OPTION_SELECTOR,
+  INTELLIGENCE_PICKER_SELECTORS,
   MODEL_PICKER_SELECTORS,
   PICKER_OPTION_SELECTOR,
   PROMPT_SELECTORS,
@@ -37,6 +42,10 @@ import {
 import { CHATGPT_ORIGIN, type AppConfig } from "../config.js";
 import { BrowserRuntime } from "./runtime.js";
 import {
+  composerNeedsAttachmentReset,
+  type ComposerResidueSnapshot,
+} from "./composer-cleanup.js";
+import {
   WorkspaceProjectManager,
   WorkspaceProjectError,
 } from "../projects/browser.js";
@@ -59,6 +68,7 @@ export type ChatGptErrorCode =
   | "CONVERSATION_BUSY"
   | "UPLOAD_UNAVAILABLE"
   | "UPLOAD_UNCONFIRMED"
+  | "COMPOSER_NOT_CLEAN"
   | "ASSET_UNSAFE_ORIGIN"
   | "ASSET_RETRIEVAL_UNSUPPORTED";
 
@@ -125,6 +135,32 @@ async function firstVisible(page: Page, selectors: readonly string[]): Promise<L
   return null;
 }
 
+async function firstVisibleWithin(
+  scope: Locator,
+  selectors: readonly string[]
+): Promise<Locator | null> {
+  for (const selector of selectors) {
+    const locator = scope.locator(selector).first();
+    if (await locator.isVisible().catch(() => false)) return locator;
+  }
+  return null;
+}
+
+async function composerForm(page: Page): Promise<Locator> {
+  const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 15_000);
+  if (!composer) {
+    const ui = await detectChatGptUiState(page);
+    throwForUiState(ui);
+    throw new ChatGptWebError(
+      "UI_CHANGED",
+      "Could not find the ChatGPT prompt composer. The web UI may have changed."
+    );
+  }
+  const form = composer.locator("xpath=ancestor::form[1]");
+  if ((await form.count().catch(() => 0)) > 0) return form.first();
+  return composer.locator("xpath=..");
+}
+
 async function firstExisting(page: Page, selectors: readonly string[]): Promise<Locator | null> {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -169,11 +205,12 @@ function throwForUiState(ui: ChatGptUiSnapshot): void {
 }
 
 async function pickerInfo(page: Page, selectors: readonly string[]): Promise<PickerInfo> {
-  const button = await firstVisible(page, selectors);
+  const form = await composerForm(page);
+  const button = await firstVisibleWithin(form, selectors);
   if (!button) return { found: false, current: null, options: [] };
 
   const current = normalizeText(await button.innerText().catch(() => ""));
-  await button.click();
+  await button.press("Enter").catch(() => undefined);
   try {
     await page.waitForTimeout(150);
     const values = await page.locator(PICKER_OPTION_SELECTOR).allInnerTexts();
@@ -187,13 +224,97 @@ async function pickerInfo(page: Page, selectors: readonly string[]): Promise<Pic
   }
 }
 
+async function modernIntelligenceCapabilities(
+  page: Page,
+  button: Locator
+): Promise<ChatGptCapabilities> {
+  const controlText = normalizeText(await button.innerText().catch(() => ""));
+  await button.press("Enter").catch(() => undefined);
+
+  const deadline = Date.now() + 3_000;
+  let menuVisible = false;
+  while (Date.now() < deadline) {
+    menuVisible = await page
+      .locator(INTELLIGENCE_MENU_SELECTOR)
+      .filter({ visible: true })
+      .last()
+      .isVisible()
+      .catch(() => false);
+    if (menuVisible) break;
+    await page.waitForTimeout(50);
+  }
+
+  if (!menuVisible) {
+    await button.click({ force: true }).catch(() => undefined);
+    await page.waitForTimeout(150);
+  }
+
+  try {
+    const optionLocator = page
+      .locator(INTELLIGENCE_MODEL_OPTION_SELECTOR)
+      .filter({ visible: true });
+    const modelOptions = uniqueOptions(await optionLocator.allInnerTexts().catch(() => []));
+    const checked = page
+      .locator(INTELLIGENCE_MODEL_OPTION_SELECTOR + '[aria-checked="true"]')
+      .filter({ visible: true })
+      .first();
+    const checkedText = normalizeText(await checked.innerText().catch(() => ""));
+
+    const slider = page
+      .locator(INTELLIGENCE_EFFORT_SLIDER_SELECTOR)
+      .last();
+    const sliderAttached = (await slider.count().catch(() => 0)) > 0;
+    let effortCurrent: string | null = null;
+    let effortOptions: string[] = [];
+    if (sliderAttached) {
+      const rawMin = await slider.getAttribute("aria-valuemin").catch(() => null);
+      const rawMax = await slider.getAttribute("aria-valuemax").catch(() => null);
+      const rawNow = await slider.getAttribute("aria-valuenow").catch(() => null);
+      const valueText = await slider.getAttribute("aria-valuetext").catch(() => null);
+      const min = rawMin !== null ? Number(rawMin) : NaN;
+      const max = rawMax !== null ? Number(rawMax) : NaN;
+      const now = rawNow !== null ? Number(rawNow) : NaN;
+      if (
+        Number.isInteger(min) &&
+        Number.isInteger(max) &&
+        max >= min &&
+        max - min < 10
+      ) {
+        effortOptions = Array.from({ length: max - min + 1 }, (_, index) =>
+          String(min + index)
+        );
+      }
+      effortCurrent =
+        valueText?.trim() ||
+        (Number.isInteger(now) ? String(now) : null);
+    }
+
+    return {
+      modelPicker: {
+        found: true,
+        current: checkedText || controlText || null,
+        options: modelOptions,
+      },
+      effortPicker: {
+        found: sliderAttached,
+        current: effortCurrent,
+        options: effortOptions,
+      },
+      flattenedPicker: true,
+    };
+  } finally {
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+}
+
 async function selectExact(
   page: Page,
   selectors: readonly string[],
   label: string,
   code: "MODEL_UNAVAILABLE" | "EFFORT_UNAVAILABLE"
 ): Promise<void> {
-  const button = await firstVisible(page, selectors);
+  const form = await composerForm(page);
+  const button = await firstVisibleWithin(form, selectors);
   if (!button) {
     throw new ChatGptWebError(
       "UI_CHANGED",
@@ -233,6 +354,68 @@ async function selectExact(
   } finally {
     await page.keyboard.press("Escape").catch(() => undefined);
   }
+}
+
+interface AttachmentAcceptanceSnapshot {
+  present: string[];
+  attachedFiles: number;
+  uploading: boolean;
+  chipCount: number;
+  sendReady: boolean;
+}
+
+async function attachmentAcceptanceSnapshot(
+  page: Page,
+  filenames: string[],
+  scope: Locator
+): Promise<AttachmentAcceptanceSnapshot> {
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+  const attributeText = await page
+    .locator("[aria-label],[title],[alt]")
+    .evaluateAll((nodes) =>
+      nodes
+        .map(
+          (node) =>
+            node.getAttribute("aria-label") ??
+            node.getAttribute("title") ??
+            node.getAttribute("alt") ??
+            ""
+        )
+        .join("\n")
+    )
+    .catch(() => "");
+
+  const haystack = bodyText + "\n" + attributeText;
+  const present = filenames.filter((filename) => haystack.includes(filename));
+
+  const attachedFiles = await page
+    .locator('input[type="file"]')
+    .evaluateAll((nodes) =>
+      nodes.reduce(
+        (total, node) =>
+          total + ((node as HTMLInputElement).files?.length ?? 0),
+        0
+      )
+    )
+    .catch(() => 0);
+
+  const uploading = await page
+    .locator(UPLOAD_BUSY_SELECTOR + ', [role="progressbar"]')
+    .filter({ visible: true })
+    .first()
+    .isVisible()
+    .catch(() => false);
+
+  const chipCount = await scope
+    .locator(ATTACHMENT_CHIP_SELECTOR)
+    .count()
+    .catch(() => 0);
+
+  const sendReady = await firstVisible(page, SEND_BUTTON_SELECTORS)
+    .then((button) => button?.isEnabled().catch(() => false) ?? false)
+    .catch(() => false);
+
+  return { present, attachedFiles, uploading, chipCount, sendReady };
 }
 
 async function messageHasCopyButton(message: Locator): Promise<boolean> {
@@ -390,43 +573,57 @@ export class ChatGptWebClient {
     headless: boolean;
     ui: ChatGptUiSnapshot;
   }> {
-    const page = await this.runtime.newPage();
-    try {
+    const page = await this.runtime.page();
+    if (!page.url().startsWith(CHATGPT_ORIGIN)) {
       await page.goto(CHATGPT_ORIGIN, {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
       });
-      const ui = await detectChatGptUiState(page);
-      const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 2_000);
-      const authenticated = !["auth_required", "challenge_required"].includes(ui.state);
-      return {
-        authenticated,
-        uiReady: Boolean(composer) && ["ready", "generating", "paused"].includes(ui.state),
-        conversationId: extractConversationId(page.url()),
-        projectId: extractProjectId(page.url()),
-        headless: this.runtime.headless,
-        ui,
-      };
-    } finally {
-      await page.close().catch(() => undefined);
     }
+
+    const deadline = Date.now() + 15_000;
+    let ui = await detectChatGptUiState(page);
+    while (ui.state === "unknown" && Date.now() < deadline) {
+      await page.waitForTimeout(250);
+      ui = await detectChatGptUiState(page);
+    }
+
+    const authenticated = ["ready", "generating", "paused", "rate_limited", "remote_error"].includes(
+      ui.state
+    );
+    return {
+      authenticated,
+      uiReady: ["ready", "generating", "paused"].includes(ui.state),
+      conversationId: extractConversationId(page.url()),
+      projectId: extractProjectId(page.url()),
+      headless: this.runtime.headless,
+      ui,
+    };
   }
 
   async capabilities(): Promise<ChatGptCapabilities> {
-    const page = await this.runtime.newPage();
-    try {
+    const page = await this.runtime.page();
+    if (!page.url().startsWith(CHATGPT_ORIGIN)) {
       await this.navigate(page);
-      await this.requireComposer(page);
-      const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
-      const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
-      return {
-        modelPicker,
-        effortPicker,
-        flattenedPicker: modelPicker.found && !effortPicker.found,
-      };
-    } finally {
-      await page.close().catch(() => undefined);
     }
+    await this.requireComposer(page);
+
+    const form = await composerForm(page);
+    const intelligenceButton = await firstVisibleWithin(
+      form,
+      INTELLIGENCE_PICKER_SELECTORS
+    );
+    if (intelligenceButton) {
+      return modernIntelligenceCapabilities(page, intelligenceButton);
+    }
+
+    const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
+    const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
+    return {
+      modelPicker,
+      effortPicker,
+      flattenedPicker: modelPicker.found && !effortPicker.found,
+    };
   }
 
   async bindWorkspaceProject(input: {
@@ -489,6 +686,52 @@ export class ChatGptWebClient {
   }
 
   private async applySelections(page: Page, model?: string, effort?: string): Promise<void> {
+    if (!model && !effort) return;
+
+    // Current ChatGPT exposes model + reasoning effort through one intelligence
+    // picker. If the caller explicitly requests the selection that is already
+    // active, no UI mutation is necessary. This is both safer and avoids
+    // routing the modern picker through the legacy model-switcher selectors.
+    const form = await composerForm(page);
+    const intelligenceButton = await firstVisibleWithin(
+      form,
+      INTELLIGENCE_PICKER_SELECTORS
+    );
+    if (intelligenceButton) {
+      const capabilities = await modernIntelligenceCapabilities(page, intelligenceButton);
+      const currentModel = normalizeText(capabilities.modelPicker.current ?? "");
+      const currentEffort = normalizeText(capabilities.effortPicker.current ?? "");
+      const requestedModel = normalizeText(model ?? "");
+      const requestedEffort = normalizeText(effort ?? "");
+
+      const modelAlreadySelected = !model || currentModel === requestedModel;
+      const effortAlreadySelected = !effort || currentEffort === requestedEffort;
+      if (modelAlreadySelected && effortAlreadySelected) return;
+
+      if (model && !modelAlreadySelected) {
+        throw new ChatGptWebError(
+          "MODEL_UNAVAILABLE",
+          'Requested model "' +
+            model +
+            '" differs from the current modern intelligence-picker model "' +
+            (capabilities.modelPicker.current ?? "(unknown)") +
+            '". Changing modern model rows is not yet verified safe.'
+        );
+      }
+      if (effort && !effortAlreadySelected) {
+        throw new ChatGptWebError(
+          "EFFORT_UNAVAILABLE",
+          'Requested effort "' +
+            effort +
+            '" differs from the current modern intelligence-picker effort "' +
+            (capabilities.effortPicker.current ?? "(unknown)") +
+            '". Changing the modern effort slider is not yet verified safe.'
+        );
+      }
+      return;
+    }
+
+    // Legacy/fallback picker path.
     if (model) await selectExact(page, MODEL_PICKER_SELECTORS, model, "MODEL_UNAVAILABLE");
     if (effort) {
       const effortButton = await firstVisible(page, EFFORT_PICKER_SELECTORS);
@@ -513,6 +756,103 @@ export class ChatGptWebClient {
     return composer.locator("xpath=..");
   }
 
+  private async composerResidue(
+    page: Page
+  ): Promise<ComposerResidueSnapshot> {
+    const scope = await this.composerScope(page);
+    const attachmentChipCount = await scope
+      .locator(ATTACHMENT_CHIP_SELECTOR)
+      .count()
+      .catch(() => 0);
+    const attachmentRemoveControlCount = await scope
+      .locator(ATTACHMENT_REMOVE_SELECTOR)
+      .count()
+      .catch(() => 0);
+    const attachedFileCount = await scope
+      .locator('input[type="file"]')
+      .evaluateAll((nodes) =>
+        nodes.reduce(
+          (total, node) =>
+            total + ((node as HTMLInputElement).files?.length ?? 0),
+          0
+        )
+      )
+      .catch(() => 0);
+
+    return {
+      attachmentChipCount,
+      attachmentRemoveControlCount,
+      attachedFileCount,
+    };
+  }
+
+  private async clearComposerText(page: Page): Promise<void> {
+    let composer = await this.requireComposer(page);
+
+    const read = async (): Promise<string> => {
+      const value = await composer.inputValue().catch(() => null);
+      if (value !== null) return value;
+      return composer.innerText().catch(() => "");
+    };
+
+    if (!normalizeText(await read())) return;
+
+    await composer.fill("").catch(() => undefined);
+    await page.waitForTimeout(50);
+    if (!normalizeText(await read())) return;
+
+    // Fallback for contenteditable variants that occasionally ignore fill("")
+    // during a React re-render.
+    composer = await this.requireComposer(page);
+    await composer.focus().catch(() => undefined);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.keyboard.press("Backspace");
+    await page.waitForTimeout(50);
+
+    const remaining = normalizeText(await read());
+    if (remaining) {
+      throw new ChatGptWebError(
+        "COMPOSER_NOT_CLEAN",
+        "Could not clear the existing ChatGPT composer draft before sending a new prompt."
+      );
+    }
+  }
+
+  private async prepareComposerForSend(page: Page): Promise<void> {
+    await this.requireComposer(page);
+
+    const before = await this.composerResidue(page);
+    if (composerNeedsAttachmentReset(before)) {
+      // Do not click individual remove buttons. A live-tested ChatGPT failure
+      // mode leaves the file input accepting files while the attachment chip
+      // never renders again after removal. Reloading the same Project page is
+      // the reliable reset.
+      await page.reload({
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+      await this.requireComposer(page);
+      await page.waitForTimeout(250);
+
+      const after = await this.composerResidue(page);
+      if (composerNeedsAttachmentReset(after)) {
+        throw new ChatGptWebError(
+          "COMPOSER_NOT_CLEAN",
+          "Could not clear existing ChatGPT attachments before sending. " +
+            "Remaining evidence: chips=" +
+            after.attachmentChipCount +
+            ", removeControls=" +
+            after.attachmentRemoveControlCount +
+            ", attachedFiles=" +
+            after.attachedFileCount +
+            "."
+        );
+      }
+    }
+
+    await this.clearComposerText(page);
+  }
+
   private async uploadInputBatch(
     page: Page,
     uploadInput: Locator,
@@ -523,39 +863,32 @@ export class ChatGptWebClient {
     const filenames = assets.map((asset) => asset.record.filename);
     await uploadInput.setInputFiles(paths);
 
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + 60_000;
     let confirmedSince: number | null = null;
+    let last: AttachmentAcceptanceSnapshot = {
+      present: [],
+      attachedFiles: 0,
+      uploading: false,
+      chipCount: beforeChips,
+      sendReady: false,
+    };
+
     while (Date.now() < deadline) {
       const ui = await detectChatGptUiState(page);
       throwForUiState(ui);
 
       const scope = await this.composerScope(page);
-      let named = 0;
-      for (const filename of filenames) {
-        const visible = await scope
-          .getByText(filename, { exact: true })
-          .last()
-          .isVisible()
-          .catch(() => false);
-        if (visible) named++;
-      }
+      last = await attachmentAcceptanceSnapshot(page, filenames, scope);
 
-      const chipCount = await scope.locator(ATTACHMENT_CHIP_SELECTOR).count().catch(() => 0);
-      const busy = await scope.locator(UPLOAD_BUSY_SELECTOR).first().isVisible().catch(() => false);
-      const fileCount = await uploadInput
-        .evaluate((node) => (node as HTMLInputElement).files?.length ?? 0)
-        .catch(() => 0);
-      const sendReady = await firstVisible(page, SEND_BUTTON_SELECTORS)
-        .then((button) => button?.isEnabled().catch(() => false) ?? false)
-        .catch(() => false);
+      // The filename appearing in body text or accessibility metadata is the
+      // strongest current ChatGPT acceptance signal. React may replace the
+      // original file input after processing, so input.files alone is
+      // diagnostic only and must never authorize a send.
+      const filenameEvidence = last.present.length === filenames.length;
+      const chipEvidence =
+        last.chipCount >= beforeChips + filenames.length;
 
-      const strongEvidence =
-        named === filenames.length ||
-        chipCount >= beforeChips + filenames.length;
-      const fallbackEvidence =
-        fileCount === filenames.length && sendReady;
-
-      if ((strongEvidence || fallbackEvidence) && !busy) {
+      if ((filenameEvidence || chipEvidence) && !last.uploading) {
         confirmedSince ??= Date.now();
         if (Date.now() - confirmedSince >= 750) {
           throwForUiState(await detectChatGptUiState(page));
@@ -567,9 +900,27 @@ export class ChatGptWebClient {
       await page.waitForTimeout(250);
     }
 
+    // A failed attachment can leave ChatGPT's composer wedged for future
+    // uploads. Best-effort reload resets that transient composer state while
+    // preserving the persistent browser session/project URL.
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(
+      () => undefined
+    );
+
     throw new ChatGptWebError(
       "UPLOAD_UNCONFIRMED",
-      "ChatGPT did not expose a stable attachment state before the upload timeout; prompt was not sent."
+      "ChatGPT did not expose a stable attachment state before the upload timeout; prompt was not sent. " +
+        "Last evidence: present=" +
+        JSON.stringify(last.present) +
+        ", attachedFiles=" +
+        last.attachedFiles +
+        ", chipCount=" +
+        last.chipCount +
+        ", uploading=" +
+        last.uploading +
+        ", sendReady=" +
+        last.sendReady +
+        "."
     );
   }
 
@@ -700,7 +1051,7 @@ export class ChatGptWebClient {
       await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
     }
 
-    const composer = await this.requireComposer(page);
+    await this.requireComposer(page);
     const preSendUi = await detectChatGptUiState(page);
     throwForUiState(preSendUi);
     if (preSendUi.state === "generating" || preSendUi.state === "paused") {
@@ -709,12 +1060,43 @@ export class ChatGptWebClient {
         "Cannot send a new turn while the current conversation is generating or paused."
       );
     }
-    await this.applySelections(page, input.model, input.effort);
 
+    // Always sanitize the composer before a new send. This clears an abandoned
+    // draft and resets every stale attachment even when the new turn has no
+    // attachments of its own.
+    await this.prepareComposerForSend(page);
+
+    if (expectedProjectId && extractProjectId(page.url()) !== expectedProjectId) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "Composer cleanup left the workspace's bound ChatGPT Project."
+      );
+    }
+    if (input.workspaceId) {
+      await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
+    }
+
+    // Attach only after the old composer state is clean.
+    await this.uploadInputs(page, resolvedInputs);
+
+    if (expectedProjectId && extractProjectId(page.url()) !== expectedProjectId) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "Attachment preparation left the workspace's bound ChatGPT Project."
+      );
+    }
+    if (input.workspaceId) {
+      await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
+    }
+
+    // Upload/recovery may have re-rendered the editor. Clear the draft one more
+    // time immediately before applying the explicit selection and new prompt.
+    await this.clearComposerText(page);
+    await this.applySelections(page, input.model, input.effort);
+    const composer = await this.requireComposer(page);
     const baselineAssistantCount = await page.locator(ASSISTANT_MESSAGE_SELECTOR).count();
     await composer.fill(input.prompt);
     await page.waitForTimeout(100);
-    await this.uploadInputs(page, resolvedInputs);
 
     const send = await firstVisible(page, SEND_BUTTON_SELECTORS);
     if (send && (await send.isEnabled().catch(() => false))) await send.click();

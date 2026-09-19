@@ -22,15 +22,18 @@ https://github.com/jiho-symply/codex-chatgpt-web-mcp
 현재 작업 중인 project 파일은 수정하지 마.
 
 1. Node.js >= 20과 Edge/Chrome/Chromium 중 지원 브라우저가 있는지 확인해.
-2. 다음 명령을 실행해:
-   npx -y codex-chatgpt-web-mcp@latest login
+2. Codex가 MCP를 시작하기 전에 CGW를 한 번 설치해:
+   npm install -g codex-chatgpt-web-mcp@latest
+3. 다음 명령을 실행해:
+   cgw login
    ChatGPT 로그인, CAPTCHA, 2FA처럼 사람의 조작이 필요하면 브라우저를 열어둔 채 나에게 완료해달라고 요청하고 기다려.
-3. 다음 명령으로 MCP를 Codex에 등록해:
-   codex mcp add chatgpt-web -- npx -y codex-chatgpt-web-mcp@latest mcp
-4. 다음 명령으로 등록을 확인해:
+4. 이미 설치된 launcher를 MCP로 등록해:
+   codex mcp add chatgpt-web -- cgw mcp
+5. 다음 명령으로 등록을 확인해:
    codex mcp list
-5. 문서화된 npx 방식이 실제로 실패하기 전에는 repository를 clone/build하지 마.
-6. 현재 Codex 세션이 새 MCP를 바로 인식하지 못하면 Codex를 재시작해야 한다고 알려줘.
+6. 저장되는 MCP command에 `npx ... mcp`를 넣지 마. Codex의 MCP startup timeout에는 npm/network cold start 시간도 포함돼.
+7. 문서화된 package 설치 방식이 실제로 실패하기 전에는 repository를 clone/build하지 마.
+8. 현재 Codex 세션이 새 MCP를 바로 인식하지 못하면 Codex를 재시작해야 한다고 알려줘.
 
 문제가 생기면 추측해서 우회하지 말고 실패한 명령과 실제 오류를 보여줘.
 ```
@@ -47,12 +50,20 @@ Codex에 local shell 실행 권한이 있으면 설치와 등록은 스스로 �
 - Linux: Google Chrome 또는 Chromium
 
 ```bash
-# 최초 1회 ChatGPT 로그인
-npx -y codex-chatgpt-web-mcp@latest login
+# MCP startup 경로 밖에서 한 번 설치
+npm install -g codex-chatgpt-web-mcp@latest
 
-# Codex에 CGW 등록
-codex mcp add chatgpt-web -- npx -y codex-chatgpt-web-mcp@latest mcp
+# 최초 1회 ChatGPT 로그인
+cgw login
+
+# 이미 설치된 launcher를 Codex에 등록
+codex mcp add chatgpt-web -- cgw mcp
 ```
+
+persistent MCP command로
+`npx -y codex-chatgpt-web-mcp@latest mcp`를 등록하지 않는 것을 권장합니다.
+cold npm/network resolution이 CGW initialize 전에 Codex의 MCP startup budget을
+소모할 수 있습니다.
 
 확인:
 
@@ -109,6 +120,7 @@ Codex ── MCP / stdio ──▶ CGW ── browser ──▶ ChatGPT Web
 - [Input attachments](docs/input-attachments.md)
 - [Structured responses](docs/response-manifest.md)
 - [Reliability / async turns](docs/reliability.md)
+- [Autonomous E2E testing](docs/e2e.md)
 - [Security](SECURITY.md)
 
 ## 기타

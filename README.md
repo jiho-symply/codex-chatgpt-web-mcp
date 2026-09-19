@@ -22,15 +22,18 @@ Use the normal-user install flow, not the development/source-build flow.
 Do not modify files in my current project.
 
 1. Check that Node.js >= 20 and a supported Edge/Chrome/Chromium browser are available.
-2. Run:
-   npx -y codex-chatgpt-web-mcp@latest login
+2. Install CGW once, before Codex starts the MCP server:
+   npm install -g codex-chatgpt-web-mcp@latest
+3. Run:
+   cgw login
    If ChatGPT login, CAPTCHA, or 2FA needs human interaction, stop and ask me to complete it in the opened browser.
-3. Register the MCP server with:
-   codex mcp add chatgpt-web -- npx -y codex-chatgpt-web-mcp@latest mcp
-4. Verify registration with:
+4. Register the already-installed MCP launcher with:
+   codex mcp add chatgpt-web -- cgw mcp
+5. Verify registration with:
    codex mcp list
-5. Do not clone/build the repository unless the documented npx path actually fails.
-6. If the current Codex session cannot see the newly added MCP server, tell me to restart Codex.
+6. Do not put `npx ... mcp` in the saved MCP command: Codex's MCP startup timeout also covers npm/network cold-start work.
+7. Do not clone/build the repository unless the documented package install actually fails.
+8. If the current Codex session cannot see the newly added MCP server, tell me to restart Codex.
 
 If anything fails, show me the exact failing command and error instead of guessing.
 ```
@@ -47,12 +50,19 @@ Requirements: **Node.js 20+** and a local browser.
 - Linux: Google Chrome or Chromium
 
 ```bash
-# One-time ChatGPT login
-npx -y codex-chatgpt-web-mcp@latest login
+# Install once outside the MCP startup path
+npm install -g codex-chatgpt-web-mcp@latest
 
-# Register CGW with Codex
-codex mcp add chatgpt-web -- npx -y codex-chatgpt-web-mcp@latest mcp
+# One-time ChatGPT login
+cgw login
+
+# Register the already-installed launcher
+codex mcp add chatgpt-web -- cgw mcp
 ```
+
+Do not register `npx -y codex-chatgpt-web-mcp@latest mcp` as the persistent
+MCP command. A cold npm/network resolution can consume Codex's MCP startup
+budget before CGW receives the MCP initialize request.
 
 Verify with:
 
@@ -110,6 +120,7 @@ Detailed documentation is kept out of this README:
 - [Input attachments](docs/input-attachments.md)
 - [Structured responses](docs/response-manifest.md)
 - [Reliability / async turns](docs/reliability.md)
+- [Autonomous E2E testing](docs/e2e.md)
 - [Security model](SECURITY.md)
 
 ## Notes

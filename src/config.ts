@@ -14,11 +14,17 @@ export const MAX_INPUT_ASSET_BYTES = 20 * 1024 * 1024;
 export const MAX_INPUT_TOTAL_BYTES = 50 * 1024 * 1024;
 export const MAX_INPUT_ATTACHMENTS = 10;
 export const DEFAULT_INPUT_TTL_HOURS = 24;
+export const DEFAULT_E2E_REMOTE_SEND_INTERVAL_MS = 60_000;
+export const DEFAULT_E2E_PREFLIGHT_SETTLE_MS = 10_000;
+
+export type BrowserMode = "system-cdp" | "playwright";
 
 export interface AppConfig {
   stateDir: string;
   profileDir: string;
   headless: boolean;
+  browserMode: BrowserMode;
+  cdpPort: number | undefined;
   browserChannel: string | undefined;
   browserExecutable: string | undefined;
   timeoutMs: number;
@@ -33,6 +39,8 @@ export interface AppConfig {
   maxInputAttachments: number;
   inputTtlMs: number;
   requireWorkspaceProject: boolean;
+  e2eRemoteSendIntervalMs: number;
+  e2ePreflightSettleMs: number;
 }
 
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
@@ -41,6 +49,23 @@ function boolEnv(value: string | undefined, fallback: boolean): boolean {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   throw new Error("Invalid boolean environment value: " + value);
+}
+
+function browserModeEnv(value: string | undefined): BrowserMode {
+  const fallback: BrowserMode = process.platform === "win32" ? "system-cdp" : "playwright";
+  if (value === undefined || value.trim() === "") return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "system-cdp" || normalized === "playwright") return normalized;
+  throw new Error("Invalid CGW_BROWSER_MODE: " + value);
+}
+
+function optionalIntEnv(value: string | undefined, min: number, max: number): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error("Expected integer between " + min + " and " + max + ", got: " + value);
+  }
+  return parsed;
 }
 
 function intEnv(value: string | undefined, fallback: number, min: number, max: number): number {
@@ -98,6 +123,8 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
     stateDir,
     profileDir,
     headless: overrides.headless ?? boolEnv(process.env.CGW_HEADLESS, true),
+    browserMode: browserModeEnv(process.env.CGW_BROWSER_MODE),
+    cdpPort: optionalIntEnv(process.env.CGW_CDP_PORT, 1024, 65535),
     browserChannel: channel || undefined,
     browserExecutable: browserExecutable || undefined,
     timeoutMs: intEnv(process.env.CGW_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 10_000, 600_000),
@@ -116,5 +143,17 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
       60 *
       1000,
     requireWorkspaceProject: boolEnv(process.env.CGW_REQUIRE_WORKSPACE_PROJECT, true),
+    e2eRemoteSendIntervalMs: intEnv(
+      process.env.CGW_E2E_REMOTE_SEND_INTERVAL_MS,
+      DEFAULT_E2E_REMOTE_SEND_INTERVAL_MS,
+      10_000,
+      600_000
+    ),
+    e2ePreflightSettleMs: intEnv(
+      process.env.CGW_E2E_PREFLIGHT_SETTLE_MS,
+      DEFAULT_E2E_PREFLIGHT_SETTLE_MS,
+      0,
+      120_000
+    ),
   };
 }

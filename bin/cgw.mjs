@@ -1,22 +1,19 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { register } from "tsx/esm/api";
 
-const require = createRequire(import.meta.url);
-const tsxCli = require.resolve("tsx/cli");
-const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+register();
 
-const result = spawnSync(
-  process.execPath,
-  [tsxCli, cli, ...process.argv.slice(2)],
-  {
-    stdio: "inherit",
-    env: process.env,
+try {
+  const args = process.argv.slice(2);
+  if (args.length === 0 || args[0] === "mcp") {
+    await import("../src/mcp-entry.ts");
+  } else {
+    await import("../src/cli.ts");
   }
-);
-
-if (result.error) throw result.error;
-if (result.signal) process.kill(process.pid, result.signal);
-process.exitCode = result.status ?? 1;
+} catch (error) {
+  process.stderr.write(
+    "Error: " + (error instanceof Error ? error.message : String(error)) + "\n"
+  );
+  process.exitCode = 1;
+}

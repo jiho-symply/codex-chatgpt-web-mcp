@@ -29,15 +29,18 @@ Use the normal-user install flow, not the development/source-build flow.
 Do not modify files in my current project.
 
 1. Check that Node.js >= 20 and a supported Edge/Chrome/Chromium browser are available.
-2. Run:
-   npx -y codex-chatgpt-web-mcp@latest login
+2. Install CGW before registering the MCP server:
+   npm install -g codex-chatgpt-web-mcp@latest
+3. Run:
+   cgw login
    If ChatGPT login, CAPTCHA, or 2FA needs human interaction, stop and ask me to complete it in the opened browser.
-3. Register the MCP server with:
-   codex mcp add chatgpt-web -- npx -y codex-chatgpt-web-mcp@latest mcp
-4. Verify registration with:
+4. Register the already-installed launcher:
+   codex mcp add chatgpt-web -- cgw mcp
+5. Verify registration with:
    codex mcp list
-5. Do not clone/build the repository unless the documented npx path actually fails.
-6. If the current Codex session cannot see the newly added MCP server, tell me to restart Codex.
+6. Do not save `npx ... mcp` as the MCP launcher because npm/network cold-start work counts against Codex's MCP startup timeout.
+7. Do not clone/build the repository unless the documented package install actually fails.
+8. If the current Codex session cannot see the newly added MCP server, tell me to restart Codex.
 
 If anything fails, show me the exact failing command and error instead of guessing.
 ```
@@ -50,17 +53,27 @@ human steps are:
 
 ## Manual install
 
-### 1. Sign in once
+### 1. Install once
 
 ```bash
-npx -y codex-chatgpt-web-mcp@latest login
+npm install -g codex-chatgpt-web-mcp@latest
 ```
 
-### 2. Register with Codex
+### 2. Sign in once
 
 ```bash
-codex mcp add chatgpt-web -- npx -y codex-chatgpt-web-mcp@latest mcp
+cgw login
 ```
+
+### 3. Register with Codex
+
+```bash
+codex mcp add chatgpt-web -- cgw mcp
+```
+
+This keeps package acquisition out of the MCP startup path. Codex can then
+initialize an already-installed local process instead of waiting for npm/network
+work inside its startup timeout.
 
 Verify:
 
@@ -85,8 +98,8 @@ For UI-only configuration:
 
 1. Open Settings → MCP Servers.
 2. Add a local STDIO server named `chatgpt-web`.
-3. Command: `npx -y codex-chatgpt-web-mcp@latest mcp`.
-4. On Windows, use `npx.cmd` if the UI cannot resolve `npx`.
+3. Command: `cgw mcp`.
+4. On Windows, use `cgw.cmd mcp` if the UI cannot resolve the npm global shim.
 5. Save and restart the client.
 
 ## Windows
@@ -96,8 +109,27 @@ or Microsoft Edge, CGW uses that browser first. If the default browser is not a
 supported Chromium browser or cannot be detected, CGW falls back to installed
 Chrome/Edge.
 
-CGW uses its own persistent automation profile, so this chooses the browser
+On Windows the default browser mode is `system-cdp`. CGW starts the real
+Chrome/Edge executable directly with its dedicated CGW user-data directory and
+a local, fixed non-zero DevTools port, then attaches Playwright over CDP. Chrome
+is therefore not launched by Playwright/WebDriver and CGW does not pass
+`--headless`, `--enable-automation`, or `--no-sandbox` on this path. Login,
+2FA, CAPTCHA, and browser verification remain manual interactions in the visible
+browser.
+
+CGW uses its own persistent browser profile, so this chooses the browser
 application (Chrome vs Edge), not your normal browser profile. No WSL is required.
+
+Advanced overrides:
+
+```text
+CGW_BROWSER_MODE=system-cdp   # Windows default
+CGW_CDP_PORT=9333             # optional fixed non-zero port
+CGW_BROWSER_EXECUTABLE=C:\\path\\to\\chrome.exe
+```
+
+Set `CGW_BROWSER_MODE=playwright` only to use the legacy
+`launchPersistentContext` path.
 
 ## Linux
 
