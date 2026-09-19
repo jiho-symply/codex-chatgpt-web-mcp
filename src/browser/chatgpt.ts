@@ -955,7 +955,7 @@ export class ChatGptWebClient {
       await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
     }
 
-    const composer = await this.requireComposer(page);
+    await this.requireComposer(page);
     const preSendUi = await detectChatGptUiState(page);
     throwForUiState(preSendUi);
     if (preSendUi.state === "generating" || preSendUi.state === "paused") {
@@ -964,12 +964,29 @@ export class ChatGptWebClient {
         "Cannot send a new turn while the current conversation is generating or paused."
       );
     }
-    await this.applySelections(page, input.model, input.effort);
 
+    // Attach first. A stale attachment from a previous failed send may require
+    // a page reload to recover ChatGPT's composer; filling the prompt before
+    // that reload would silently discard the prompt.
+    await this.uploadInputs(page, resolvedInputs);
+
+    if (expectedProjectId && extractProjectId(page.url()) !== expectedProjectId) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "Attachment preparation left the workspace's bound ChatGPT Project."
+      );
+    }
+    if (input.workspaceId) {
+      await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
+    }
+
+    // Selection and prompt entry happen after attachment recovery so any
+    // reload/reset cannot erase them.
+    await this.applySelections(page, input.model, input.effort);
+    const composer = await this.requireComposer(page);
     const baselineAssistantCount = await page.locator(ASSISTANT_MESSAGE_SELECTOR).count();
     await composer.fill(input.prompt);
     await page.waitForTimeout(100);
-    await this.uploadInputs(page, resolvedInputs);
 
     const send = await firstVisible(page, SEND_BUTTON_SELECTORS);
     if (send && (await send.isEnabled().catch(() => false))) await send.click();
