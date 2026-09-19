@@ -115,15 +115,28 @@ describe("browser launch candidates", () => {
       })
     ).toEqual([{ label: "configured browser channel", channel: "chrome" }]);
   });
-  it("launches system Chrome without WebDriver-style automation flags", () => {
-    const args = systemCdpLaunchArgs("C:\\CGW\\profile", 9333);
+  it("normalizes Windows system-CDP coordinates without WebDriver-style flags", () => {
+    const args = systemCdpLaunchArgs("C:\\CGW\\profile", 9333, "win32");
     expect(args).toEqual([
       "--user-data-dir=C:\\CGW\\profile",
       "--remote-debugging-port=9333",
+      "--force-device-scale-factor=1",
       "https://chatgpt.com",
     ]);
-    expect(args.some((arg) => arg === "--headless" || arg === "--enable-automation" || arg === "--no-sandbox")).toBe(false);
+    expect(
+      args.some(
+        (arg) =>
+          arg === "--headless" ||
+          arg === "--enable-automation" ||
+          arg === "--no-sandbox"
+      )
+    ).toBe(false);
     expect(args).not.toContain("--remote-debugging-port=0");
+  });
+
+  it("does not force device scale outside Windows", () => {
+    const args = systemCdpLaunchArgs("/tmp/cgw-profile", 9333, "linux");
+    expect(args).not.toContain("--force-device-scale-factor=1");
   });
 
   it("rejects port zero for system-CDP", () => {
