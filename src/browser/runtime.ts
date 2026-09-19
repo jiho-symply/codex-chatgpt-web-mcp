@@ -292,7 +292,6 @@ export class BrowserRuntime {
       const args = [
         "--user-data-dir=" + this.config.profileDir,
         "--remote-debugging-port=" + port,
-        "--remote-debugging-address=127.0.0.1",
         CHATGPT_ORIGIN,
       ];
 
