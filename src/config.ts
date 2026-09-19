@@ -14,6 +14,8 @@ export const MAX_INPUT_ASSET_BYTES = 20 * 1024 * 1024;
 export const MAX_INPUT_TOTAL_BYTES = 50 * 1024 * 1024;
 export const MAX_INPUT_ATTACHMENTS = 10;
 export const DEFAULT_INPUT_TTL_HOURS = 24;
+export const DEFAULT_E2E_REMOTE_SEND_INTERVAL_MS = 60_000;
+export const DEFAULT_E2E_PREFLIGHT_SETTLE_MS = 10_000;
 
 export type BrowserMode = "system-cdp" | "playwright";
 
@@ -37,6 +39,8 @@ export interface AppConfig {
   maxInputAttachments: number;
   inputTtlMs: number;
   requireWorkspaceProject: boolean;
+  e2eRemoteSendIntervalMs: number;
+  e2ePreflightSettleMs: number;
 }
 
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
@@ -139,5 +143,17 @@ export function loadConfig(overrides: { headless?: boolean } = {}): AppConfig {
       60 *
       1000,
     requireWorkspaceProject: boolEnv(process.env.CGW_REQUIRE_WORKSPACE_PROJECT, true),
+    e2eRemoteSendIntervalMs: intEnv(
+      process.env.CGW_E2E_REMOTE_SEND_INTERVAL_MS,
+      DEFAULT_E2E_REMOTE_SEND_INTERVAL_MS,
+      10_000,
+      600_000
+    ),
+    e2ePreflightSettleMs: intEnv(
+      process.env.CGW_E2E_PREFLIGHT_SETTLE_MS,
+      DEFAULT_E2E_PREFLIGHT_SETTLE_MS,
+      0,
+      120_000
+    ),
   };
 }
