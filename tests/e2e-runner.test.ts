@@ -78,6 +78,7 @@ describe("autonomous E2E runner", () => {
     const turnsById = new Map<string, TurnView>();
     const requests = new Map<string, { prompt: string; turnId: string }>();
     let turnCounter = 0;
+    let remoteDispatches = 0;
 
     const fakeClient = {
       async status() {
@@ -163,16 +164,19 @@ describe("autonomous E2E runner", () => {
 
         const turnId = "turn_" + String(++turnCounter).padStart(24, "0");
         requests.set(input.requestId, { prompt: input.prompt, turnId });
+        remoteDispatches++;
 
         let final: TurnView;
-        if (input.requestId.endsWith(":idem")) {
-          final = completed(turnId, input.requestId, projectId, "IDEMPOTENCY_OK");
-        } else if (input.requestId.endsWith(":structured")) {
-          final = completed(turnId, input.requestId, projectId, "STRUCTURED_OK", {
+        if (input.requestId.endsWith(":compact")) {
+          const response =
+            "ATTACHMENT_SENTINEL_7F3A\n\n" +
+            "```python\nprint('CGW')\n```\n\n" +
+            "| A | B |\n| --- | --- |\n| 1 | 2 |";
+          final = completed(turnId, input.requestId, projectId, response, {
             version: 1,
-            plainText: "STRUCTURED_OK",
+            plainText: response,
             parts: [
-              { type: "text", text: "STRUCTURED_OK" },
+              { type: "text", text: "ATTACHMENT_SENTINEL_7F3A" },
               { type: "code", language: "python", text: "print('CGW')" },
               {
                 type: "table",
@@ -186,10 +190,11 @@ describe("autonomous E2E runner", () => {
             assetCount: 0,
             codeBlockCount: 1,
           });
-        } else if (input.requestId.endsWith(":attachment")) {
-          final = completed(turnId, input.requestId, projectId, "ATTACHMENT_SENTINEL_7F3A");
-        } else if (input.requestId.endsWith(":selection")) {
-          final = completed(turnId, input.requestId, projectId, "SELECTION_OK");
+          final = {
+            ...final,
+            requestedModel: input.model ?? null,
+            requestedEffort: input.effort ?? null,
+          };
         } else {
           final = completed(turnId, input.requestId, projectId, "OK");
         }
@@ -226,7 +231,7 @@ describe("autonomous E2E runner", () => {
     const started = runner.start({
       workspaceId: "ws_0123456789abcdef",
       workspaceName: "CGW-E2E-Test",
-      includeSelection: false,
+      includeSelection: true,
     });
 
     let latest = runner.status(started.runId);
@@ -239,8 +244,9 @@ describe("autonomous E2E runner", () => {
     expect(latest.status).toBe("completed");
     expect(latest.summary.fail).toBe(0);
     expect(latest.summary.blocked).toBe(0);
-    expect(latest.summary.pass).toBeGreaterThanOrEqual(10);
-    expect(latest.tests.find((test) => test.id === "E2")?.status).toBe("NOT_RUN");
+    expect(latest.summary.pass).toBeGreaterThanOrEqual(12);
+    expect(latest.tests.find((test) => test.id === "E2")?.status).toBe("PASS");
+    expect(remoteDispatches).toBe(1);
     expect(fs.existsSync(latest.reportPath)).toBe(true);
     expect(fs.readFileSync(latest.reportPath, "utf8")).toContain("# CGW Windows E2E Report");
 
