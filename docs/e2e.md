@@ -26,6 +26,26 @@ structured extraction, attachment readback, explicit-current-selection smoke,
 and Project isolation. The duplicate-send check is satisfied from the local
 request-id store and does not dispatch a second ChatGPT message.
 
+The runner is also deliberately paced:
+
+- at least **10 seconds** of preflight/settling before its one remote-send attempt;
+- at least **60 seconds** between E2E remote-send attempts, even across MCP
+  process restarts;
+- a pre-dispatch failure (for example attachment confirmation) still reserves
+  the cooldown window, so a retry cannot immediately hammer ChatGPT;
+- visible authentication/challenge/usage-limit states stop the run as
+  `BLOCKED`; the runner never sleeps through a rate limit and retries on its
+  own.
+
+Advanced test-lab overrides:
+
+```text
+CGW_E2E_REMOTE_SEND_INTERVAL_MS=60000
+CGW_E2E_PREFLIGHT_SETTLE_MS=10000
+```
+
+These are safety/pacing controls, not rate-limit bypass controls.
+
 It reuses the supplied workspace binding and does not delete non-test Projects.
 
 ## Covered checks
