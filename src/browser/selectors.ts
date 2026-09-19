@@ -73,20 +73,31 @@ export const COPY_BUTTON_SELECTORS = [
   "button[aria-label*=\"복사\"]",
 ] as const;
 
+export const INTELLIGENCE_PICKER_SELECTORS = [
+  'button[class*="__composer-pill"][aria-haspopup="menu"]',
+  'button[aria-haspopup="menu"][data-tone="neutral"]',
+  'button[data-testid="model-switcher-dropdown-button"][aria-haspopup="menu"]',
+] as const;
+
 export const MODEL_PICKER_SELECTORS = [
-  "[data-testid=\"model-switcher-dropdown-button\"]",
-  "button[data-testid*=\"model-switcher\"]",
-  "button[aria-label*=\"model\" i]",
-  "button[aria-label*=\"모델\"]",
+  'button[data-testid="model-switcher-dropdown-button"]',
+  'button[data-testid*="model-switcher"][aria-haspopup="menu"]',
 ] as const;
 
 export const EFFORT_PICKER_SELECTORS = [
-  "button[data-testid*=\"reasoning\"]",
-  "button[data-testid*=\"thinking\"]",
-  "button[aria-label*=\"reasoning\" i]",
-  "button[aria-label*=\"thinking\" i]",
-  "button[aria-label*=\"추론\"]",
+  'button[data-testid*="reasoning"][aria-haspopup="menu"]',
+  'button[data-testid*="thinking"][aria-haspopup="menu"]',
 ] as const;
+
+export const INTELLIGENCE_MENU_SELECTOR = [
+  '[data-testid="composer-intelligence-picker-content"]',
+  '[role="menu"]:has([role="menuitemradio"], [data-model-reasoning-effort-slider])',
+  '[role="group"]:has([role="menuitemradio"], [data-model-reasoning-effort-slider])',
+].join(", ");
+
+export const INTELLIGENCE_MODEL_OPTION_SELECTOR = '[role="menuitemradio"]';
+export const INTELLIGENCE_EFFORT_SLIDER_SELECTOR =
+  '[data-model-reasoning-effort-slider] [role="slider"]';
 
 export const PICKER_OPTION_SELECTOR =
   "[role=\"menuitem\"]:visible, [role=\"menuitemradio\"]:visible, [role=\"option\"]:visible";
