@@ -106,7 +106,7 @@ async function waitForProjectCreationScope(
 }
 
 async function visibleProjectOnly(scope: Locator): Promise<Locator | null> {
-  for (const role of ["radio", "option", "menuitem"] as const) {
+  for (const role of ["radio", "menuitemradio", "option", "menuitem"] as const) {
     const item = scope.getByRole(role, { name: PROJECT_ONLY_LABEL }).first();
     if (await item.isVisible().catch(() => false)) return item;
   }
@@ -123,10 +123,13 @@ async function activeChoiceOverlay(page: Page): Promise<Locator | null> {
 }
 
 async function selectionLooksProjectOnly(scope: Locator): Promise<boolean> {
-  const radio = scope.getByRole("radio", { name: PROJECT_ONLY_LABEL }).first();
-  if (await radio.isVisible().catch(() => false)) {
-    if (await radio.isChecked().catch(() => false)) return true;
-    if ((await radio.getAttribute("aria-checked").catch(() => null)) === "true") return true;
+  for (const role of ["radio", "menuitemradio"] as const) {
+    const radio = scope.getByRole(role, { name: PROJECT_ONLY_LABEL }).first();
+    if (await radio.isVisible().catch(() => false)) {
+      if (await radio.isChecked().catch(() => false)) return true;
+      if ((await radio.getAttribute("aria-checked").catch(() => null)) === "true") return true;
+      if ((await radio.getAttribute("data-state").catch(() => null)) === "checked") return true;
+    }
   }
 
   const selected = scope.locator(
@@ -140,7 +143,11 @@ async function selectionLooksProjectOnly(scope: Locator): Promise<boolean> {
     if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
   }
 
-  for (const selector of ['[role="combobox"]', 'button[aria-haspopup="listbox"]']) {
+  for (const selector of [
+    '[role="combobox"]',
+    'button[aria-haspopup="listbox"]',
+    'button[aria-haspopup="menu"]',
+  ]) {
     const controls = scope.locator(selector);
     const count = await controls.count().catch(() => 0);
     for (let i = 0; i < count; i++) {
@@ -207,19 +214,22 @@ async function selectProjectOnlyMemory(page: Page, initialScope: Locator): Promi
     );
   }
 
-  await option.press("Enter").catch(() => option!.click({ force: true }));
-  await page.waitForTimeout(150);
+  await option.click({ force: true }).catch(() => option!.press("Enter"));
 
-  if (!(await selectionLooksProjectOnly(scope))) {
+  const deadline = Date.now() + 2_500;
+  while (Date.now() < deadline) {
+    if (await selectionLooksProjectOnly(scope)) return scope;
+
     const overlay = await activeChoiceOverlay(page);
-    if (!overlay || !(await selectionLooksProjectOnly(overlay))) {
-      throw new WorkspaceProjectError(
-        "PROJECT_MEMORY_UNVERIFIED",
-        "Project-only memory could not be confirmed before continuing."
-      );
-    }
+    if (overlay && (await selectionLooksProjectOnly(overlay))) return scope;
+
+    await page.waitForTimeout(100);
   }
-  return scope;
+
+  throw new WorkspaceProjectError(
+    "PROJECT_MEMORY_UNVERIFIED",
+    "Project-only memory could not be confirmed before continuing."
+  );
 }
 
 function canonicalProjectIdFromHref(href: string | null): string | null {
