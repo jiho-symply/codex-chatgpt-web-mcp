@@ -780,7 +780,8 @@ export class E2ERunner {
         }
       );
 
-      if (compactTurn?.status === "completed") {
+      const completedCompactTurn = compactTurn as TurnView | null;
+      if (completedCompactTurn?.status === "completed") {
         await this.step(
           state,
           {
@@ -794,7 +795,7 @@ export class E2ERunner {
             );
             if (
               recovered.status !== "completed" ||
-              recovered.response !== compactTurn!.response
+              recovered.response !== completedCompactTurn.response
             ) {
               throw new Error("Completed combined turn could not be recovered exactly.");
             }
@@ -815,17 +816,17 @@ export class E2ERunner {
             expected: "attachment text + python code + markdown table in manifest",
           },
           async () => {
-            if (!manifestHasStructuredContract(compactTurn!, attachmentSentinel)) {
+            if (!manifestHasStructuredContract(completedCompactTurn, attachmentSentinel)) {
               throw new Error(
                 "Manifest did not contain the required text/code/table contract. " +
-                  manifestDiagnostic(compactTurn!)
+                  manifestDiagnostic(completedCompactTurn)
               );
             }
             return {
               observed: "Combined manifest contains text, python code, and table parts.",
               requestId: compactRequest,
               turnId: compactTurnId,
-              projectId: compactTurn!.projectId,
+              projectId: completedCompactTurn.projectId,
             };
           }
         );
@@ -839,20 +840,20 @@ export class E2ERunner {
           },
           async () => {
             const body =
-              compactTurn!.manifest?.plainText ??
-              compactTurn!.response ??
+              completedCompactTurn.manifest?.plainText ??
+              completedCompactTurn.response ??
               "";
             if (!body.includes(attachmentSentinel)) {
               throw new Error(
                 "Combined response did not reproduce the attached sentinel. " +
-                  manifestDiagnostic(compactTurn!)
+                  manifestDiagnostic(completedCompactTurn)
               );
             }
             return {
               observed: "Attached sentinel was read back in the combined response.",
               requestId: compactRequest,
               turnId: compactTurnId,
-              projectId: compactTurn!.projectId,
+              projectId: completedCompactTurn.projectId,
             };
           }
         );
@@ -876,23 +877,23 @@ export class E2ERunner {
                   "the same combined send succeeds with explicit current model/effort metadata",
               },
               async () => {
-                if (compactTurn!.requestedModel !== selection.model) {
+                if (completedCompactTurn.requestedModel !== selection.model) {
                   throw new Error(
                     "requestedModel mismatch: expected " +
                       selection.model +
                       ", got " +
-                      String(compactTurn!.requestedModel)
+                      String(completedCompactTurn.requestedModel)
                   );
                 }
                 if (
                   selection.effort &&
-                  compactTurn!.requestedEffort !== selection.effort
+                  completedCompactTurn.requestedEffort !== selection.effort
                 ) {
                   throw new Error(
                     "requestedEffort mismatch: expected " +
                       selection.effort +
                       ", got " +
-                      String(compactTurn!.requestedEffort)
+                      String(completedCompactTurn.requestedEffort)
                   );
                 }
                 return {
@@ -902,7 +903,7 @@ export class E2ERunner {
                     (selection.effort ? ", effort=" + selection.effort : ""),
                   requestId: compactRequest,
                   turnId: compactTurnId,
-                  projectId: compactTurn!.projectId,
+                  projectId: completedCompactTurn.projectId,
                 };
               }
             );
@@ -925,19 +926,19 @@ export class E2ERunner {
             expected: "the single combined real send stays on the bound projectId",
           },
           async () => {
-            if (!state.projectId || compactTurn!.projectId !== state.projectId) {
+            if (!state.projectId || completedCompactTurn.projectId !== state.projectId) {
               throw new Error(
                 "Combined turn project mismatch: expected " +
                   String(state.projectId) +
                   ", got " +
-                  String(compactTurn!.projectId)
+                  String(completedCompactTurn.projectId)
               );
             }
             return {
               observed: "The combined real send stayed on the bound Project.",
               requestId: compactRequest,
               turnId: compactTurnId,
-              projectId: compactTurn!.projectId,
+              projectId: completedCompactTurn.projectId,
             };
           }
         );
