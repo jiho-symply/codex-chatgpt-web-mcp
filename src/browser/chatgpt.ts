@@ -390,43 +390,47 @@ export class ChatGptWebClient {
     headless: boolean;
     ui: ChatGptUiSnapshot;
   }> {
-    const page = await this.runtime.newPage();
-    try {
+    const page = await this.runtime.page();
+    if (!page.url().startsWith(CHATGPT_ORIGIN)) {
       await page.goto(CHATGPT_ORIGIN, {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
       });
-      const ui = await detectChatGptUiState(page);
-      const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 2_000);
-      const authenticated = !["auth_required", "challenge_required"].includes(ui.state);
-      return {
-        authenticated,
-        uiReady: Boolean(composer) && ["ready", "generating", "paused"].includes(ui.state),
-        conversationId: extractConversationId(page.url()),
-        projectId: extractProjectId(page.url()),
-        headless: this.runtime.headless,
-        ui,
-      };
-    } finally {
-      await page.close().catch(() => undefined);
     }
+
+    const deadline = Date.now() + 15_000;
+    let ui = await detectChatGptUiState(page);
+    while (ui.state === "unknown" && Date.now() < deadline) {
+      await page.waitForTimeout(250);
+      ui = await detectChatGptUiState(page);
+    }
+
+    const authenticated = ["ready", "generating", "paused", "rate_limited", "remote_error"].includes(
+      ui.state
+    );
+    return {
+      authenticated,
+      uiReady: ["ready", "generating", "paused"].includes(ui.state),
+      conversationId: extractConversationId(page.url()),
+      projectId: extractProjectId(page.url()),
+      headless: this.runtime.headless,
+      ui,
+    };
   }
 
   async capabilities(): Promise<ChatGptCapabilities> {
-    const page = await this.runtime.newPage();
-    try {
+    const page = await this.runtime.page();
+    if (!page.url().startsWith(CHATGPT_ORIGIN)) {
       await this.navigate(page);
-      await this.requireComposer(page);
-      const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
-      const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
-      return {
-        modelPicker,
-        effortPicker,
-        flattenedPicker: modelPicker.found && !effortPicker.found,
-      };
-    } finally {
-      await page.close().catch(() => undefined);
     }
+    await this.requireComposer(page);
+    const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
+    const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
+    return {
+      modelPicker,
+      effortPicker,
+      flattenedPicker: modelPicker.found && !effortPicker.found,
+    };
   }
 
   async bindWorkspaceProject(input: {
