@@ -278,6 +278,21 @@ export class E2ERunner {
     return state;
   }
 
+  latest(): E2ERunState | null {
+    const dir = e2eDir(this.config.stateDir);
+    const files = fs
+      .readdirSync(dir)
+      .filter((name) => /^e2e_[a-f0-9]{16}\.json$/.test(name))
+      .map((name) => ({
+        name,
+        stat: fs.statSync(path.join(dir, name)),
+      }))
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+    const latest = files[0];
+    if (!latest) return null;
+    return this.status(latest.name.slice(0, -5));
+  }
+
   status(runId: string): E2ERunState {
     const state = readState(this.config.stateDir, runId);
     if (state.status === "running" && !this.active.has(runId)) {
