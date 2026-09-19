@@ -228,10 +228,11 @@ export class BrowserRuntime {
       for (const candidate of browserLaunchCandidates(this.config)) {
         attempted.push(candidate.label);
         try {
-          this.context = await chromium.launchPersistentContext(
+          const context = await chromium.launchPersistentContext(
             this.config.profileDir,
             {
               headless: this.config.headless,
+              chromiumSandbox: true,
               acceptDownloads: true,
               viewport: { width: 1440, height: 1000 },
               args: ["--disable-dev-shm-usage"],
@@ -241,8 +242,17 @@ export class BrowserRuntime {
                 : {}),
             }
           );
-          this.context.setDefaultTimeout(15_000);
-          return this.context;
+          const lock = this.lock;
+          this.context = context;
+          context.once("close", () => {
+            if (this.context === context) this.context = null;
+            if (lock && this.lock === lock) {
+              this.lock = null;
+              lock.release();
+            }
+          });
+          context.setDefaultTimeout(15_000);
+          return context;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (isProfileBusyError(message)) {
