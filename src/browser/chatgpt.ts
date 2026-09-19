@@ -618,6 +618,52 @@ export class ChatGptWebClient {
   }
 
   private async applySelections(page: Page, model?: string, effort?: string): Promise<void> {
+    if (!model && !effort) return;
+
+    // Current ChatGPT exposes model + reasoning effort through one intelligence
+    // picker. If the caller explicitly requests the selection that is already
+    // active, no UI mutation is necessary. This is both safer and avoids
+    // routing the modern picker through the legacy model-switcher selectors.
+    const form = await composerForm(page);
+    const intelligenceButton = await firstVisibleWithin(
+      form,
+      INTELLIGENCE_PICKER_SELECTORS
+    );
+    if (intelligenceButton) {
+      const capabilities = await modernIntelligenceCapabilities(page, intelligenceButton);
+      const currentModel = normalizeText(capabilities.modelPicker.current ?? "");
+      const currentEffort = normalizeText(capabilities.effortPicker.current ?? "");
+      const requestedModel = normalizeText(model ?? "");
+      const requestedEffort = normalizeText(effort ?? "");
+
+      const modelAlreadySelected = !model || currentModel === requestedModel;
+      const effortAlreadySelected = !effort || currentEffort === requestedEffort;
+      if (modelAlreadySelected && effortAlreadySelected) return;
+
+      if (model && !modelAlreadySelected) {
+        throw new ChatGptWebError(
+          "MODEL_UNAVAILABLE",
+          'Requested model "' +
+            model +
+            '" differs from the current modern intelligence-picker model "' +
+            (capabilities.modelPicker.current ?? "(unknown)") +
+            '". Changing modern model rows is not yet verified safe.'
+        );
+      }
+      if (effort && !effortAlreadySelected) {
+        throw new ChatGptWebError(
+          "EFFORT_UNAVAILABLE",
+          'Requested effort "' +
+            effort +
+            '" differs from the current modern intelligence-picker effort "' +
+            (capabilities.effortPicker.current ?? "(unknown)") +
+            '". Changing the modern effort slider is not yet verified safe.'
+        );
+      }
+      return;
+    }
+
+    // Legacy/fallback picker path.
     if (model) await selectExact(page, MODEL_PICKER_SELECTORS, model, "MODEL_UNAVAILABLE");
     if (effort) {
       const effortButton = await firstVisible(page, EFFORT_PICKER_SELECTORS);
