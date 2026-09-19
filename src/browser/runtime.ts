@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import type { AppConfig } from "../config.js";
+import { CHATGPT_ORIGIN, type AppConfig } from "../config.js";
 import { ProfileLock } from "./profile-lock.js";
 
 export type BrowserRuntimeErrorCode = "PROFILE_BUSY" | "BROWSER_NOT_INSTALLED";
@@ -278,24 +278,25 @@ export class BrowserRuntime {
   private async startSystemCdp(): Promise<BrowserContext> {
     this.lock = ProfileLock.acquire(this.config.profileDir);
 
-    const candidate = browserLaunchCandidates(this.config).find((item) => item.executablePath);
-    if (!candidate?.executablePath) {
-      throw new BrowserRuntimeError(
-        "BROWSER_NOT_INSTALLED",
-        "System-CDP mode requires an installed Chrome/Edge executable. " +
-          "Set CGW_BROWSER_EXECUTABLE to an absolute browser path if auto-detection fails."
-      );
-    }
-
-    const port = await freeLoopbackPort(this.config.cdpPort);
-    const args = [
-      "--user-data-dir=" + this.config.profileDir,
-      "--remote-debugging-port=" + port,
-      "--remote-debugging-address=127.0.0.1",
-      CHATGPT_ORIGIN,
-    ];
-
     try {
+      const candidate = browserLaunchCandidates(this.config).find((item) => item.executablePath);
+      if (!candidate?.executablePath) {
+        throw new BrowserRuntimeError(
+          "BROWSER_NOT_INSTALLED",
+          "System-CDP mode requires an installed Chrome/Edge executable. " +
+            "Set CGW_BROWSER_EXECUTABLE to an absolute browser path if auto-detection fails."
+        );
+      }
+
+      const port = await freeLoopbackPort(this.config.cdpPort);
+      const args = [
+        "--user-data-dir=" + this.config.profileDir,
+        "--remote-debugging-port=" + port,
+        "--remote-debugging-address=127.0.0.1",
+        CHATGPT_ORIGIN,
+      ];
+
+
       const child = spawn(candidate.executablePath, args, {
         stdio: "ignore",
         windowsHide: false,
