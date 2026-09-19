@@ -32,6 +32,13 @@ export const ATTACHMENT_CHIP_SELECTOR = [
   '[aria-label*="attachment" i]',
 ].join(", ");
 
+export const ATTACHMENT_REMOVE_SELECTOR = [
+  'button[aria-label*="remove file" i]',
+  'button[aria-label*="remove attachment" i]',
+  'button[aria-label*="파일 제거"]',
+  'button[aria-label*="첨부 제거"]',
+].join(", ");
+
 export const UPLOAD_BUSY_SELECTOR = [
   '[data-testid*="upload"][aria-busy="true"]',
   '[aria-label*="uploading" i]',
