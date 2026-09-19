@@ -120,6 +120,7 @@ Detailed documentation is kept out of this README:
 - [Input attachments](docs/input-attachments.md)
 - [Structured responses](docs/response-manifest.md)
 - [Reliability / async turns](docs/reliability.md)
+- [Autonomous E2E testing](docs/e2e.md)
 - [Security model](SECURITY.md)
 
 ## Notes
