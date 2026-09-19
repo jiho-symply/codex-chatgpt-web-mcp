@@ -830,6 +830,77 @@ export class WorkspaceProjectManager {
     return null;
   }
 
+  private async waitForSidebarProject(
+    page: Page,
+    binding: WorkspaceProjectBinding,
+    timeoutMs = 8_000
+  ): Promise<Locator | null> {
+    const deadline = Date.now() + timeoutMs;
+    let prepared = false;
+
+    while (Date.now() < deadline) {
+      const exact = await this.findSidebarProject(page, binding);
+      if (exact) return exact;
+
+      if (!prepared) {
+        await maybeOpenSidebar(page);
+        prepared = true;
+      }
+
+      await maybeExpandProjectsSection(page);
+
+      // Current ChatGPT may hydrate the project row before it exposes a direct
+      // href. Use the exact project-options label to find that row, then prefer
+      // its dedicated project-home control. The resulting navigation is still
+      // verified against the locally stored projectId before it is accepted.
+      const options = await exactProjectOptionsButton(page, binding.projectName);
+      if (options) {
+        const row = options.locator(
+          "xpath=ancestor::*[self::li or @role='treeitem' or @role='listitem'][1]"
+        );
+        if ((await row.count().catch(() => 0)) > 0) {
+          const home = row
+            .locator(
+              'a[href*="/g/g-p-"], button[aria-label*="project home" i], button[aria-label*="프로젝트 홈"], [role="button"][aria-label*="project home" i], [role="button"][aria-label*="프로젝트 홈"]'
+            )
+            .first();
+          if (await home.isVisible().catch(() => false)) return home;
+        }
+      }
+
+      await page.waitForTimeout(250);
+    }
+    return null;
+  }
+
+  private async tryDirectBoundProject(
+    page: Page,
+    workspaceId: string,
+    binding: WorkspaceProjectBinding
+  ): Promise<boolean> {
+    try {
+      await page.goto(binding.projectUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        if (
+          extractProjectId(page.url()) === binding.projectId &&
+          (await visibleComposer(page))
+        ) {
+          await this.assertPageBoundToWorkspace(page, workspaceId);
+          return true;
+        }
+        await page.waitForTimeout(200);
+      }
+    } catch {
+      // Fall through to the normal PROJECT_NOT_FOUND error. Direct project-home
+      // loads can transiently fail on ChatGPT, so this is a last-resort path.
+    }
+    return false;
+  }
+
   async assertPageBoundToWorkspace(
     page: Page,
     workspaceId: string
@@ -908,14 +979,17 @@ export class WorkspaceProjectManager {
     }
 
     page = await this.rootPage();
-    const target = await this.findSidebarProject(page, binding);
+    const target = await this.waitForSidebarProject(page, binding);
     if (!target) {
+      if (await this.tryDirectBoundProject(page, workspaceId, binding)) {
+        return { page, binding };
+      }
       throw new WorkspaceProjectError(
         "PROJECT_NOT_FOUND",
-        "The exact ChatGPT Project bound to this workspace is not visible in the sidebar."
+        "The exact ChatGPT Project bound to this workspace was not found after sidebar hydration or direct exact-ID navigation."
       );
     }
-    await target.click();
+    await target.press("Enter").catch(() => target.click({ force: true }));
 
     const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
@@ -955,14 +1029,17 @@ export class WorkspaceProjectManager {
       let page = await this.runtime.page();
       if (extractProjectId(page.url()) !== existing.projectId) {
         page = await this.rootPage();
-        const target = await this.findSidebarProject(page, existing);
+        const target = await this.waitForSidebarProject(page, existing);
         if (!target) {
-          throw new WorkspaceProjectError(
-            "PROJECT_NOT_FOUND",
-            "The pending ChatGPT Project is not visible in the sidebar; open that exact Project in the visible browser and retry binding."
-          );
+          if (!(await this.tryDirectBoundProject(page, workspaceId, existing))) {
+            throw new WorkspaceProjectError(
+              "PROJECT_NOT_FOUND",
+              "The pending ChatGPT Project was not found after sidebar hydration or direct exact-ID navigation."
+            );
+          }
+        } else {
+          await target.press("Enter").catch(() => target.click({ force: true }));
         }
-        await target.press("Enter").catch(() => target.click({ force: true }));
         const deadline = Date.now() + 10_000;
         while (Date.now() < deadline && extractProjectId(page.url()) !== existing.projectId) {
           await page.waitForTimeout(200);
