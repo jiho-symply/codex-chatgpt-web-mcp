@@ -248,7 +248,10 @@ async function modernIntelligenceCapabilities(
       .locator(INTELLIGENCE_MODEL_OPTION_SELECTOR)
       .filter({ visible: true });
     const modelOptions = uniqueOptions(await optionLocator.allInnerTexts().catch(() => []));
-    const checked = optionLocator.locator('[aria-checked="true"]').first();
+    const checked = page
+      .locator(INTELLIGENCE_MODEL_OPTION_SELECTOR + '[aria-checked="true"]')
+      .filter({ visible: true })
+      .first();
     const checkedText = normalizeText(await checked.innerText().catch(() => ""));
 
     const slider = page
