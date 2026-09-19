@@ -51,10 +51,29 @@ async function loginVisible(page: Page): Promise<boolean> {
 async function challengeVisible(page: Page): Promise<boolean> {
   const url = page.url().toLowerCase();
   if (url.includes("/cdn-cgi/") || url.includes("challenge")) return true;
+
   const title = (await page.title().catch(() => "")).toLowerCase();
-  if (title.includes("just a moment")) return true;
+  if (
+    title.includes("just a moment") ||
+    title.includes("security verification") ||
+    title.includes("verify you are human")
+  ) {
+    return true;
+  }
+
+  const challengeFrame = page.locator(
+    [
+      'iframe[src*="challenges.cloudflare.com"]',
+      'iframe[title*="challenge" i]',
+      'iframe[title*="verification" i]',
+    ].join(", ")
+  );
+  if ((await challengeFrame.count().catch(() => 0)) > 0) return true;
+
   return page
-    .getByText(/verify you are human|checking your browser|사람인지 확인/i)
+    .getByText(
+      /verify you are human|checking your browser|security verification|enable javascript and cookies|사람인지 확인|보안 확인/i
+    )
     .first()
     .isVisible()
     .catch(() => false);
