@@ -44,10 +44,17 @@ const NEW_PROJECT_SELECTORS = [
 ] as const;
 
 const PROJECT_NAME_INPUT_SELECTORS = [
+  'input#project-name',
+  'input[name="projectName"]',
   'input[placeholder*="project name" i]',
   'input[placeholder*="프로젝트 이름"]',
   'input[name*="project" i]',
 ] as const;
+
+const PROJECT_CREATION_MODAL_SELECTOR =
+  '[data-testid="modal-new-project-enhanced"]';
+const PROJECT_MEMORY_TRIGGER_SELECTOR =
+  'button[data-testid="project-memory-scope-trigger"]';
 
 const PROJECT_ONLY_LABEL =
   /project[- ]only memory|project only|프로젝트 전용 메모리|프로젝트만/i;
@@ -83,12 +90,16 @@ async function waitForProjectCreationScope(
 ): Promise<Locator> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const exact = page.locator(PROJECT_CREATION_MODAL_SELECTOR).last();
+    if (await exact.isVisible().catch(() => false)) return exact;
+
     const dialog = page.getByRole("dialog").last();
     if (await dialog.isVisible().catch(() => false)) return dialog;
 
     const nameInput = await firstVisible(page, PROJECT_NAME_INPUT_SELECTORS);
     if (nameInput) {
       for (const xpath of [
+        "xpath=ancestor::*[@data-testid='modal-new-project-enhanced'][1]",
         "xpath=ancestor::form[1]",
         "xpath=ancestor::*[@role='dialog'][1]",
         "xpath=ancestor::*[@data-radix-popper-content-wrapper][1]",
@@ -101,12 +112,17 @@ async function waitForProjectCreationScope(
   }
   throw new WorkspaceProjectError(
     "PROJECT_CREATE_FAILED",
-    "New Project UI did not expose a scoped creation surface."
+    "New Project UI did not expose the expected creation surface."
   );
 }
 
 async function visibleProjectOnly(scope: Locator): Promise<Locator | null> {
-  for (const role of ["radio", "menuitemradio", "option", "menuitem"] as const) {
+  const radio = scope
+    .getByRole("menuitemradio", { name: PROJECT_ONLY_LABEL })
+    .first();
+  if (await radio.isVisible().catch(() => false)) return radio;
+
+  for (const role of ["radio", "option", "menuitem"] as const) {
     const item = scope.getByRole(role, { name: PROJECT_ONLY_LABEL }).first();
     if (await item.isVisible().catch(() => false)) return item;
   }
@@ -123,13 +139,19 @@ async function activeChoiceOverlay(page: Page): Promise<Locator | null> {
 }
 
 async function selectionLooksProjectOnly(scope: Locator): Promise<boolean> {
-  for (const role of ["radio", "menuitemradio"] as const) {
-    const radio = scope.getByRole(role, { name: PROJECT_ONLY_LABEL }).first();
-    if (await radio.isVisible().catch(() => false)) {
-      if (await radio.isChecked().catch(() => false)) return true;
-      if ((await radio.getAttribute("aria-checked").catch(() => null)) === "true") return true;
-      if ((await radio.getAttribute("data-state").catch(() => null)) === "checked") return true;
+  const exactRadio = scope
+    .getByRole("menuitemradio", { name: PROJECT_ONLY_LABEL })
+    .first();
+  if (await exactRadio.isVisible().catch(() => false)) {
+    if ((await exactRadio.getAttribute("aria-checked").catch(() => null)) === "true") {
+      return true;
     }
+  }
+
+  const trigger = scope.locator(PROJECT_MEMORY_TRIGGER_SELECTOR).first();
+  if (await trigger.isVisible().catch(() => false)) {
+    const text = (await trigger.innerText().catch(() => "")).trim();
+    if (PROJECT_ONLY_LABEL.test(text)) return true;
   }
 
   const selected = scope.locator(
@@ -143,21 +165,6 @@ async function selectionLooksProjectOnly(scope: Locator): Promise<boolean> {
     if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
   }
 
-  for (const selector of [
-    '[role="combobox"]',
-    'button[aria-haspopup="listbox"]',
-    'button[aria-haspopup="menu"]',
-  ]) {
-    const controls = scope.locator(selector);
-    const count = await controls.count().catch(() => 0);
-    for (let i = 0; i < count; i++) {
-      const control = controls.nth(i);
-      if (!(await control.isVisible().catch(() => false))) continue;
-      const text = (await control.innerText().catch(() => "")).trim();
-      const aria = (await control.getAttribute("aria-label").catch(() => null)) ?? "";
-      if (PROJECT_ONLY_LABEL.test(text) || PROJECT_ONLY_LABEL.test(aria)) return true;
-    }
-  }
   return false;
 }
 
@@ -172,64 +179,107 @@ async function newestVisibleSettingsScope(page: Page, fallback: Locator): Promis
 }
 
 async function selectProjectOnlyMemory(page: Page, initialScope: Locator): Promise<Locator> {
-  let scope = initialScope;
-  let option = await visibleProjectOnly(scope);
+  const scope = initialScope;
 
-  if (!option) {
-    const more = scope.getByRole("button", { name: MORE_OPTIONS_LABEL }).first();
-    if (await more.isVisible().catch(() => false)) {
-      await more.press("Enter").catch(() => more.click({ force: true }));
-      await page.waitForTimeout(150);
-      scope = await newestVisibleSettingsScope(page, scope);
-      option = await visibleProjectOnly(scope);
-    }
-  }
-
-  if (!option) {
-    const memoryButton = scope.getByRole("button", { name: /memory|메모리/i }).first();
-    const memoryCombo = scope.getByRole("combobox", { name: /memory|메모리/i }).first();
-    const control = (await memoryButton.isVisible().catch(() => false))
-      ? memoryButton
-      : (await memoryCombo.isVisible().catch(() => false))
-        ? memoryCombo
-        : null;
-
-    if (control) {
-      await control.press("Enter").catch(() => control.click({ force: true }));
-      await page.waitForTimeout(150);
-      const overlay = await activeChoiceOverlay(page);
-      if (overlay) {
-        const overlayOption = await visibleProjectOnly(overlay);
-        if (overlayOption) {
-          option = overlayOption;
-        }
-      }
-    }
-  }
-
-  if (!option) {
+  const trigger = scope.locator(PROJECT_MEMORY_TRIGGER_SELECTOR).first();
+  if (!(await trigger.isVisible().catch(() => false))) {
     throw new WorkspaceProjectError(
       "PROJECT_MEMORY_UNAVAILABLE",
-      "The Project creation/settings UI did not expose Project-only memory."
+      "The Project creation UI did not expose the memory selector trigger."
     );
   }
 
-  await option.click({ force: true }).catch(() => option!.press("Enter"));
+  const alreadyProjectOnly = PROJECT_ONLY_LABEL.test(
+    (await trigger.innerText().catch(() => "")).trim()
+  );
+  if (!alreadyProjectOnly) {
+    await trigger.click({ force: true });
 
-  const deadline = Date.now() + 2_500;
-  while (Date.now() < deadline) {
-    if (await selectionLooksProjectOnly(scope)) return scope;
+    const deadline = Date.now() + 2_000;
+    let menu: Locator | null = null;
+    while (Date.now() < deadline) {
+      const candidate = page.locator('[role="menu"]:visible').last();
+      if (await candidate.isVisible().catch(() => false)) {
+        menu = candidate;
+        break;
+      }
+      await page.waitForTimeout(50);
+    }
+    if (!menu) {
+      throw new WorkspaceProjectError(
+        "PROJECT_MEMORY_UNAVAILABLE",
+        "The Project memory menu did not open."
+      );
+    }
 
-    const overlay = await activeChoiceOverlay(page);
-    if (overlay && (await selectionLooksProjectOnly(overlay))) return scope;
+    const projectOnly = menu
+      .getByRole("menuitemradio", { name: PROJECT_ONLY_LABEL })
+      .first();
+    if (!(await projectOnly.isVisible().catch(() => false))) {
+      throw new WorkspaceProjectError(
+        "PROJECT_MEMORY_UNAVAILABLE",
+        "The Project memory menu did not expose Project-only memory."
+      );
+    }
 
-    await page.waitForTimeout(100);
+    await projectOnly.click({ force: true });
   }
 
-  throw new WorkspaceProjectError(
-    "PROJECT_MEMORY_UNVERIFIED",
-    "Project-only memory could not be confirmed before continuing."
-  );
+  // First proof: current trigger now names Project-only and the menu is closed.
+  const triggerDeadline = Date.now() + 2_500;
+  let triggerConfirmed = false;
+  while (Date.now() < triggerDeadline) {
+    const text = (await trigger.innerText().catch(() => "")).trim();
+    const expanded = await trigger.getAttribute("aria-expanded").catch(() => null);
+    const state = await trigger.getAttribute("data-state").catch(() => null);
+    if (
+      PROJECT_ONLY_LABEL.test(text) &&
+      expanded === "false" &&
+      state === "closed"
+    ) {
+      triggerConfirmed = true;
+      break;
+    }
+    await page.waitForTimeout(100);
+  }
+  if (!triggerConfirmed) {
+    throw new WorkspaceProjectError(
+      "PROJECT_MEMORY_UNVERIFIED",
+      "Project-only memory did not commit to the creation-dialog trigger."
+    );
+  }
+
+  // Second proof: reopen the menu and verify the actual radio state.
+  await trigger.click({ force: true });
+  const verifyDeadline = Date.now() + 2_000;
+  let verified = false;
+  while (Date.now() < verifyDeadline) {
+    const menu = page.locator('[role="menu"]:visible').last();
+    if (await menu.isVisible().catch(() => false)) {
+      const projectOnly = menu
+        .getByRole("menuitemradio", { name: PROJECT_ONLY_LABEL })
+        .first();
+      if (
+        (await projectOnly.isVisible().catch(() => false)) &&
+        (await projectOnly.getAttribute("aria-checked").catch(() => null)) === "true"
+      ) {
+        verified = true;
+        break;
+      }
+    }
+    await page.waitForTimeout(50);
+  }
+
+  await page.keyboard.press("Escape").catch(() => undefined);
+
+  if (!verified) {
+    throw new WorkspaceProjectError(
+      "PROJECT_MEMORY_UNVERIFIED",
+      "Project-only memory radio state could not be verified after selection."
+    );
+  }
+
+  return scope;
 }
 
 function canonicalProjectIdFromHref(href: string | null): string | null {
