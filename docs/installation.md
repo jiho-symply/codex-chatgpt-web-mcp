@@ -96,8 +96,27 @@ or Microsoft Edge, CGW uses that browser first. If the default browser is not a
 supported Chromium browser or cannot be detected, CGW falls back to installed
 Chrome/Edge.
 
-CGW uses its own persistent automation profile, so this chooses the browser
+On Windows the default browser mode is `system-cdp`. CGW starts the real
+Chrome/Edge executable directly with its dedicated CGW user-data directory and
+a local, fixed non-zero DevTools port, then attaches Playwright over CDP. Chrome
+is therefore not launched by Playwright/WebDriver and CGW does not pass
+`--headless`, `--enable-automation`, or `--no-sandbox` on this path. Login,
+2FA, CAPTCHA, and browser verification remain manual interactions in the visible
+browser.
+
+CGW uses its own persistent browser profile, so this chooses the browser
 application (Chrome vs Edge), not your normal browser profile. No WSL is required.
+
+Advanced overrides:
+
+```text
+CGW_BROWSER_MODE=system-cdp   # Windows default
+CGW_CDP_PORT=9333             # optional fixed non-zero port
+CGW_BROWSER_EXECUTABLE=C:\\path\\to\\chrome.exe
+```
+
+Set `CGW_BROWSER_MODE=playwright` only to use the legacy
+`launchPersistentContext` path.
 
 ## Linux
 
