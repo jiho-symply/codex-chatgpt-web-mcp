@@ -389,6 +389,58 @@ export class E2ERunner {
     );
   }
 
+  private async runLocalSafetyChecks(state: E2ERunState): Promise<void> {
+    await this.step(
+      state,
+      {
+        id: "H1",
+        name: "Missing workspace is rejected before ChatGPT send",
+        expected: "WORKSPACE_REQUIRED",
+      },
+      async () => {
+        const requestId = state.runId + ":missing-workspace";
+        try {
+          await this.exclusive(() =>
+            this.turns.send({
+              requestId,
+              prompt: "THIS MUST NOT BE SENT",
+            })
+          );
+        } catch (error) {
+          const info = errorInfo(error);
+          if (info.code === "WORKSPACE_REQUIRED") {
+            return { observed: "WORKSPACE_REQUIRED returned locally.", requestId };
+          }
+          throw error;
+        }
+        throw new Error("Missing workspace request was unexpectedly accepted.");
+      }
+    );
+
+    await this.step(
+      state,
+      {
+        id: "H2",
+        name: "Unknown turn is rejected",
+        expected: "TURN_NOT_FOUND",
+      },
+      async () => {
+        try {
+          await this.exclusive(() =>
+            this.turns.getReply("turn_000000000000000000000000")
+          );
+        } catch (error) {
+          const info = errorInfo(error);
+          if (info.code === "TURN_NOT_FOUND") {
+            return { observed: "TURN_NOT_FOUND returned locally." };
+          }
+          throw error;
+        }
+        throw new Error("Unknown turn_id was unexpectedly accepted.");
+      }
+    );
+  }
+
   private async run(state: E2ERunState): Promise<void> {
     try {
       const statusOk = await this.step(
@@ -493,18 +545,54 @@ export class E2ERunner {
           expected: "capabilities call succeeds without changing the conversation",
         },
         async () => {
-          capabilities = await this.exclusive(() => this.client.capabilities());
+          const discovered = await this.exclusive(() => this.client.capabilities());
+          if (!discovered.modelPicker.found || discovered.modelPicker.options.length === 0) {
+            throw new Error(
+              "Model capability discovery returned no usable model options: current=" +
+                (discovered.modelPicker.current ?? "-") +
+                ", found=" +
+                discovered.modelPicker.found +
+                ", options=" +
+                discovered.modelPicker.options.length
+            );
+          }
+          capabilities = discovered;
           return {
             observed:
               "model=" +
-              (capabilities.modelPicker.current ?? "-") +
+              (discovered.modelPicker.current ?? "-") +
               "; models=" +
-              capabilities.modelPicker.options.length +
+              discovered.modelPicker.options.length +
               "; effort=" +
-              (capabilities.effortPicker.current ?? "-"),
+              (discovered.effortPicker.current ?? "-"),
           };
         }
       );
+
+      if (!bindOk) {
+        this.notRun(state, "C1", "Idempotent send", "same deduplicated turn", "B1 workspace binding failed.");
+        this.notRun(state, "C2", "Wait for idempotency response", "completed exact response", "B1 workspace binding failed.");
+        this.notRun(state, "C3", "Request-id conflict is rejected locally", "REQUEST_ID_CONFLICT", "B1 workspace binding failed.");
+        this.notRun(state, "D1", "Completed turn recovery", "same completed response", "B1 workspace binding failed.");
+        this.notRun(state, "F1", "Structured response extraction", "text + code + table manifest", "B1 workspace binding failed.");
+        this.notRun(state, "G1", "Staged text attachment upload and readback", "exact sentinel response", "B1 workspace binding failed.");
+        this.notRun(
+          state,
+          "E2",
+          "Explicit current model/effort selection smoke",
+          "one short send using the current selection",
+          "B1 workspace binding failed."
+        );
+        this.notRun(
+          state,
+          "I1",
+          "Workspace Project isolation across E2E sends",
+          "every real send stays on the bound projectId",
+          "No bound Project was established."
+        );
+        await this.runLocalSafetyChecks(state);
+        return;
+      }
 
       const idemRequest = state.runId + ":idem";
       let idemTurnId: string | null = null;
@@ -719,55 +807,7 @@ export class E2ERunner {
         }
       );
 
-      await this.step(
-        state,
-        {
-          id: "H1",
-          name: "Missing workspace is rejected before ChatGPT send",
-          expected: "WORKSPACE_REQUIRED",
-        },
-        async () => {
-          const requestId = state.runId + ":missing-workspace";
-          try {
-            await this.exclusive(() =>
-              this.turns.send({
-                requestId,
-                prompt: "THIS MUST NOT BE SENT",
-              })
-            );
-          } catch (error) {
-            const info = errorInfo(error);
-            if (info.code === "WORKSPACE_REQUIRED") {
-              return { observed: "WORKSPACE_REQUIRED returned locally.", requestId };
-            }
-            throw error;
-          }
-          throw new Error("Missing workspace request was unexpectedly accepted.");
-        }
-      );
-
-      await this.step(
-        state,
-        {
-          id: "H2",
-          name: "Unknown turn is rejected",
-          expected: "TURN_NOT_FOUND",
-        },
-        async () => {
-          try {
-            await this.exclusive(() =>
-              this.turns.getReply("turn_000000000000000000000000")
-            );
-          } catch (error) {
-            const info = errorInfo(error);
-            if (info.code === "TURN_NOT_FOUND") {
-              return { observed: "TURN_NOT_FOUND returned locally." };
-            }
-            throw error;
-          }
-          throw new Error("Unknown turn_id was unexpectedly accepted.");
-        }
-      );
+      await this.runLocalSafetyChecks(state);
 
       if (state.includeSelection && capabilities) {
         const candidate = selectionCandidate(capabilities);
@@ -829,32 +869,47 @@ export class E2ERunner {
         );
       }
 
-      // A lightweight aggregate isolation assertion after all real sends.
-      const escaped = state.tests.filter(
+      // Aggregate isolation is meaningful only if at least one real browser send
+      // actually succeeded and returned a projectId.
+      const realSendIds = ["C1", "C2", "D1", "F1", "G1", "E2"];
+      const observedRealSends = state.tests.filter(
         (test) =>
-          test.projectId &&
-          state.projectId &&
-          test.projectId !== state.projectId &&
-          ["C1", "C2", "D1", "F1", "G1", "E2"].includes(test.id)
+          test.status === "PASS" &&
+          Boolean(test.projectId) &&
+          realSendIds.includes(test.id)
       );
-      this.append(
-        state,
-        testResult({
-          id: "I1",
-          name: "Workspace Project isolation across E2E sends",
-          status: escaped.length === 0 ? "PASS" : "FAIL",
-          expected: "every real send stays on the bound projectId",
-          observed:
-            escaped.length === 0
-              ? "All observed turns stayed on the bound Project."
-              : "Escaped tests: " + escaped.map((test) => test.id).join(", "),
-          errorCode: escaped.length === 0 ? null : "PROJECT_DESTINATION_MISMATCH",
-          errorMessage: escaped.length === 0 ? null : "One or more E2E turns used another Project.",
-          requestId: null,
-          turnId: structuredTurnId,
-          projectId: state.projectId,
-        })
+      const escaped = observedRealSends.filter(
+        (test) => state.projectId && test.projectId !== state.projectId
       );
+
+      if (!state.projectId || observedRealSends.length === 0) {
+        this.notRun(
+          state,
+          "I1",
+          "Workspace Project isolation across E2E sends",
+          "every real send stays on the bound projectId",
+          "No successful real send was available for an isolation assertion."
+        );
+      } else {
+        this.append(
+          state,
+          testResult({
+            id: "I1",
+            name: "Workspace Project isolation across E2E sends",
+            status: escaped.length === 0 ? "PASS" : "FAIL",
+            expected: "every real send stays on the bound projectId",
+            observed:
+              escaped.length === 0
+                ? "All successful observed sends stayed on the bound Project."
+                : "Escaped tests: " + escaped.map((test) => test.id).join(", "),
+            errorCode: escaped.length === 0 ? null : "PROJECT_DESTINATION_MISMATCH",
+            errorMessage: escaped.length === 0 ? null : "One or more E2E turns used another Project.",
+            requestId: null,
+            turnId: structuredTurnId,
+            projectId: state.projectId,
+          })
+        );
+      }
     } catch (error) {
       const info = errorInfo(error);
       this.append(
