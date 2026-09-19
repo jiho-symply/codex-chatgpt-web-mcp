@@ -74,7 +74,7 @@ program
 
 program
   .command("login")
-  .description("Open a headed persistent browser for manual ChatGPT login")
+  .description("Open the dedicated system browser for manual ChatGPT login")
   .option("--timeout-ms <n>", "maximum time to wait for browser login", parseInteger, 600_000)
   .action(async (opts: { timeoutMs: number }) => {
     if (!hasInteractiveDisplay()) {
@@ -105,7 +105,7 @@ program
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         if (await hasVisibleComposer(page)) {
-          say("Authentication confirmed. The persistent profile is ready for headless use.");
+          say("Authentication confirmed. The persistent CGW browser profile is ready.");
           return;
         }
         await page.waitForTimeout(750);
@@ -120,7 +120,7 @@ program
 
 program
   .command("doctor")
-  .description("Verify Playwright, browser profile, authentication, and ChatGPT UI")
+  .description("Verify browser profile, authentication, and ChatGPT UI")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { json: boolean }) => {
     const result = await withContext(true, (client) => client.status());
