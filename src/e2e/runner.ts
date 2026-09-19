@@ -58,6 +58,52 @@ function reportPath(stateDir: string, runId: string): string {
   return path.join(e2eDir(stateDir), runId + ".md");
 }
 
+interface RemotePacingState {
+  version: 1;
+  lastRemoteAttemptAt: string | null;
+  runId: string | null;
+}
+
+function remotePacingPath(stateDir: string): string {
+  return path.join(e2eDir(stateDir), "remote-pacing.json");
+}
+
+function readRemotePacing(stateDir: string): RemotePacingState {
+  const file = remotePacingPath(stateDir);
+  if (!fs.existsSync(file)) {
+    return { version: 1, lastRemoteAttemptAt: null, runId: null };
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<RemotePacingState>;
+    if (parsed.version !== 1) throw new Error("invalid pacing state version");
+    return {
+      version: 1,
+      lastRemoteAttemptAt:
+        typeof parsed.lastRemoteAttemptAt === "string"
+          ? parsed.lastRemoteAttemptAt
+          : null,
+      runId: typeof parsed.runId === "string" ? parsed.runId : null,
+    };
+  } catch {
+    // Corrupt pacing state must fail conservatively rather than trigger a rapid
+    // send. Treat "now" as the most recent attempt.
+    return {
+      version: 1,
+      lastRemoteAttemptAt: new Date().toISOString(),
+      runId: null,
+    };
+  }
+}
+
+function writeRemotePacing(
+  stateDir: string,
+  state: RemotePacingState
+): void {
+  fs.writeFileSync(remotePacingPath(stateDir), JSON.stringify(state, null, 2), {
+    mode: 0o600,
+  });
+}
+
 function errorInfo(error: unknown): { code: string | null; message: string } {
   if (error && typeof error === "object") {
     const candidate = error as { code?: unknown; message?: unknown };
@@ -338,6 +384,44 @@ export class E2ERunner {
     return { state, markdown: fs.readFileSync(state.reportPath, "utf8") };
   }
 
+  private async waitForRemoteSendWindow(
+    state: E2ERunState
+  ): Promise<{ waitedMs: number; previousAttemptAt: string | null }> {
+    const pacing = readRemotePacing(this.config.stateDir);
+    const startedAt = Date.parse(state.startedAt);
+    const previousAt = pacing.lastRemoteAttemptAt
+      ? Date.parse(pacing.lastRemoteAttemptAt)
+      : Number.NaN;
+
+    const earliestFromStart =
+      startedAt + this.config.e2ePreflightSettleMs;
+    const earliestFromPrevious = Number.isFinite(previousAt)
+      ? previousAt + this.config.e2eRemoteSendIntervalMs
+      : 0;
+    const target = Math.max(earliestFromStart, earliestFromPrevious);
+    const waitStarted = Date.now();
+
+    while (Date.now() < target) {
+      const remaining = target - Date.now();
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(1_000, Math.max(25, remaining)))
+      );
+    }
+
+    // Reserve the remote-send slot before dispatch. Even a pre-dispatch
+    // attachment failure consumes the pacing window, preventing rapid retries.
+    writeRemotePacing(this.config.stateDir, {
+      version: 1,
+      lastRemoteAttemptAt: new Date().toISOString(),
+      runId: state.runId,
+    });
+
+    return {
+      waitedMs: Date.now() - waitStarted,
+      previousAttemptAt: pacing.lastRemoteAttemptAt,
+    };
+  }
+
   private append(state: E2ERunState, result: E2ETestResult): void {
     state.tests.push(result);
     writeState(this.config.stateDir, state);
@@ -482,6 +566,26 @@ export class E2ERunner {
         },
         async () => {
           const status = await this.exclusive(() => this.client.status());
+          if (
+            status.ui.state === "auth_required" ||
+            status.ui.state === "challenge_required" ||
+            status.ui.state === "rate_limited"
+          ) {
+            const code =
+              status.ui.state === "auth_required"
+                ? "AUTH_REQUIRED"
+                : status.ui.state === "challenge_required"
+                  ? "CHALLENGE_REQUIRED"
+                  : "RATE_LIMITED";
+            const error = new Error(
+              status.ui.message ??
+                (code === "RATE_LIMITED"
+                  ? "ChatGPT usage/rate limit is active."
+                  : "Human action is required.")
+            ) as Error & { code?: string };
+            error.code = code;
+            throw error;
+          }
           if (!status.authenticated) {
             const error = new Error("ChatGPT login is required.") as Error & { code?: string };
             error.code = "AUTH_REQUIRED";
@@ -649,6 +753,34 @@ export class E2ERunner {
         ...(selection?.model ? { model: selection.model } : {}),
         ...(selection?.effort ? { effort: selection.effort } : {}),
       };
+
+      const pacing = await this.waitForRemoteSendWindow(state);
+      this.append(
+        state,
+        testResult({
+          id: "P1",
+          name: "Remote-send pacing guard",
+          status: "PASS",
+          expected:
+            "at least " +
+            this.config.e2ePreflightSettleMs +
+            " ms preflight and " +
+            this.config.e2eRemoteSendIntervalMs +
+            " ms between E2E remote-send attempts",
+          observed:
+            "Waited " +
+            pacing.waitedMs +
+            " ms before reserving the single remote-send slot" +
+            (pacing.previousAttemptAt
+              ? "; previous attempt=" + pacing.previousAttemptAt
+              : "; no previous attempt recorded"),
+          errorCode: null,
+          errorMessage: null,
+          requestId: null,
+          turnId: null,
+          projectId: state.projectId,
+        })
+      );
 
       const compactSent = await this.step(
         state,
