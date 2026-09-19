@@ -434,6 +434,80 @@ async function openExistingProjectByExactName(
   );
 }
 
+async function currentPageExactProjectId(
+  page: Page,
+  projectName: string
+): Promise<string | null> {
+  const projectId = extractProjectId(page.url());
+  if (!projectId || !isValidProjectId(projectId)) return null;
+  const composer = await visibleComposer(page);
+  if (!composer) return null;
+
+  const label =
+    (await composer.getAttribute("aria-label").catch(() => null)) ??
+    (await composer.getAttribute("data-placeholder").catch(() => null)) ??
+    (await composer.getAttribute("placeholder").catch(() => null)) ??
+    "";
+  const explicitName = explicitComposerProjectName(label);
+  if (explicitName && sameDisplayName(explicitName, projectName)) return projectId;
+
+  const headings = page.getByRole("heading", { name: projectName, exact: true });
+  const count = await headings.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    if (await headings.nth(i).isVisible().catch(() => false)) return projectId;
+  }
+
+  const main = page.locator("main").first();
+  if ((await main.count().catch(() => 0)) > 0) {
+    const exact = main.getByText(projectName, { exact: true });
+    const exactCount = await exact.count().catch(() => 0);
+    for (let i = 0; i < exactCount; i++) {
+      if (await exact.nth(i).isVisible().catch(() => false)) return projectId;
+    }
+  }
+  return null;
+}
+
+async function currentProjectHeaderMenu(
+  page: Page,
+  projectId: string,
+  projectName: string
+): Promise<Locator | null> {
+  if ((await currentPageExactProjectId(page, projectName)) !== projectId) return null;
+
+  const composer = await visibleComposer(page);
+  const composerBox = await composer?.boundingBox().catch(() => null);
+  if (!composerBox) return null;
+
+  const main = page.locator("main").first();
+  const scope = (await main.count().catch(() => 0)) > 0 ? main : page.locator("body");
+  const buttons = scope.locator('button[aria-haspopup="menu"]:visible');
+  const count = await buttons.count().catch(() => 0);
+
+  let best: { locator: Locator; x: number; gap: number } | null = null;
+  for (let i = 0; i < count; i++) {
+    const button = buttons.nth(i);
+    const outsideSidebar = await button
+      .evaluate((node) => !node.closest("nav,aside,[role='navigation']"))
+      .catch(() => false);
+    if (!outsideSidebar) continue;
+
+    const box = await button.boundingBox().catch(() => null);
+    if (!box) continue;
+    // The project-page ellipsis sits above the composer. The intelligence
+    // picker is inside/below the composer and is therefore excluded here.
+    if (box.y + box.height > composerBox.y + 8) continue;
+    const gap = composerBox.y - (box.y + box.height);
+    if (gap > 180) continue;
+
+    if (!best || gap < best.gap || (gap === best.gap && box.x > best.x)) {
+      best = { locator: button, x: box.x, gap };
+    }
+  }
+
+  return best?.locator ?? null;
+}
+
 async function projectRowForId(
   page: Page,
   projectId: string,
@@ -515,6 +589,28 @@ async function openProjectSettings(
   if (await direct.isVisible().catch(() => false)) {
     await direct.press("Enter").catch(() => direct.click({ force: true }));
     return waitForProjectSettingsScope(page);
+  }
+
+  const headerMenu = await currentProjectHeaderMenu(page, projectId, projectName);
+  if (headerMenu) {
+    await headerMenu.press("Enter").catch(() => headerMenu.click({ force: true }));
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      for (const role of ["menuitem", "button"] as const) {
+        const settings = page.getByRole(role, { name: PROJECT_SETTINGS_LABEL }).last();
+        if (await settings.isVisible().catch(() => false)) {
+          await settings.press("Enter").catch(() => settings.click({ force: true }));
+          return waitForProjectSettingsScope(page);
+        }
+      }
+      const text = page.getByText(PROJECT_SETTINGS_LABEL).last();
+      if (await text.isVisible().catch(() => false)) {
+        await text.press("Enter").catch(() => text.click({ force: true }));
+        return waitForProjectSettingsScope(page);
+      }
+      await page.waitForTimeout(100);
+    }
+    await page.keyboard.press("Escape").catch(() => undefined);
   }
 
   // Fail closed: never fall back to an arbitrary project's options button.
@@ -772,9 +868,47 @@ export class WorkspaceProjectManager {
   }): Promise<WorkspaceProjectBinding> {
     const workspaceId = validateWorkspaceId(input.workspaceId);
     const existing = this.store.find(workspaceId);
-    if (existing) {
+    if (existing?.status === "ready") {
       await this.openBoundProject(workspaceId);
       return existing;
+    }
+
+    if (existing?.status === "memory_unverified") {
+      let page = await this.runtime.page();
+      if (extractProjectId(page.url()) !== existing.projectId) {
+        page = await this.rootPage();
+        const target = await this.findSidebarProject(page, existing);
+        if (!target) {
+          throw new WorkspaceProjectError(
+            "PROJECT_NOT_FOUND",
+            "The pending ChatGPT Project is not visible in the sidebar; open that exact Project in the visible browser and retry binding."
+          );
+        }
+        await target.press("Enter").catch(() => target.click({ force: true }));
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline && extractProjectId(page.url()) !== existing.projectId) {
+          await page.waitForTimeout(200);
+        }
+      }
+
+      if ((await currentPageExactProjectId(page, existing.projectName)) !== existing.projectId) {
+        throw new WorkspaceProjectError(
+          "PROJECT_DESTINATION_MISMATCH",
+          "The pending Project could not be verified as the active exact workspace Project."
+        );
+      }
+
+      await configureProjectOnlyMemoryFromSettings(page, existing.projectId, existing.projectName);
+      const now = new Date().toISOString();
+      const ready: WorkspaceProjectBinding = {
+        ...existing,
+        memoryVerifiedAt: now,
+        memoryVerificationSource: "settings",
+        status: "ready",
+        updatedAt: now,
+      };
+      this.store.upsert(ready);
+      return ready;
     }
 
     const namingMode = input.namingMode ?? "workspace-name";
@@ -788,12 +922,38 @@ export class WorkspaceProjectManager {
       namingMode,
     });
 
-    const page = await this.rootPage();
+    let page = await this.runtime.page();
+
+    // Recovery for pre-pending-state versions: if the user has explicitly
+    // opened one exact-name orphan Project, its URL + title/composer identify
+    // it unambiguously even when duplicate sidebar names exist.
+    let projectId = await currentPageExactProjectId(page, projectName);
+    if (projectId) {
+      const now = new Date().toISOString();
+      this.store.upsert({
+        workspaceId,
+        workspaceName: workspaceName ?? null,
+        namingMode,
+        projectId,
+        projectName,
+        projectUrl: projectHomeUrl(projectId),
+        memoryMode: "project-only",
+        memoryVerifiedAt: null,
+        memoryVerificationSource: null,
+        status: "memory_unverified",
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      page = await this.rootPage();
+    }
 
     // A previous bind attempt may have created the remote Project but failed
     // before local state was committed (for example while opening Project
     // settings). Reuse that exact-name Project instead of creating duplicates.
-    let projectId = await openExistingProjectByExactName(page, projectName);
+    if (!projectId) {
+      projectId = await openExistingProjectByExactName(page, projectName);
+    }
 
     if (!projectId) {
       const discovery = await waitForNewProjectControl(page);
@@ -838,6 +998,26 @@ export class WorkspaceProjectManager {
       }
     }
 
+    // Persist the remote identity before touching Project settings. If the
+    // settings UI drifts, the next retry resumes this exact Project instead of
+    // creating another duplicate.
+    const pendingNow = new Date().toISOString();
+    const priorPending = this.store.find(workspaceId);
+    this.store.upsert({
+      workspaceId,
+      workspaceName: workspaceName ?? null,
+      namingMode,
+      projectId,
+      projectName,
+      projectUrl: projectHomeUrl(projectId),
+      memoryMode: "project-only",
+      memoryVerifiedAt: null,
+      memoryVerificationSource: null,
+      status: "memory_unverified",
+      createdAt: priorPending?.createdAt ?? pendingNow,
+      updatedAt: pendingNow,
+    });
+
     await configureProjectOnlyMemoryFromSettings(page, projectId, projectName);
 
     const now = new Date().toISOString();
@@ -852,7 +1032,7 @@ export class WorkspaceProjectManager {
       memoryVerifiedAt: now,
       memoryVerificationSource: "settings",
       status: "ready",
-      createdAt: now,
+      createdAt: this.store.find(workspaceId)?.createdAt ?? now,
       updatedAt: now,
     };
     this.store.upsert(binding);
