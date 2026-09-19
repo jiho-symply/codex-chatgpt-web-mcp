@@ -20,9 +20,13 @@ A run:
 - does not patch the repository;
 - stops early on authentication/challenge/rate-limit blockers instead of bypassing them.
 
-The suite sends a small number of real deterministic prompts to the user's
-ChatGPT account. It reuses the supplied workspace binding and does not delete
-non-test Projects.
+The default suite has a hard budget of **one real ChatGPT message per run**.
+That single combined turn covers idempotency, response completion/recovery,
+structured extraction, attachment readback, explicit-current-selection smoke,
+and Project isolation. The duplicate-send check is satisfied from the local
+request-id store and does not dispatch a second ChatGPT message.
+
+It reuses the supplied workspace binding and does not delete non-test Projects.
 
 ## Covered checks
 
@@ -35,10 +39,10 @@ The current suite covers:
 - live model/effort capability discovery;
 - request-ID deduplication;
 - request-ID conflict rejection before dispatch;
-- send → wait → response extraction;
-- completed-turn recovery;
-- structured text/code/table manifest extraction;
-- staged text attachment upload and readback;
+- one combined send → wait → response extraction;
+- completed-turn recovery of that same turn;
+- structured text/code/table manifest extraction from that turn;
+- staged text attachment upload and readback in that turn;
 - missing-workspace rejection;
 - unknown-turn rejection;
 - Project isolation across real sends;
