@@ -186,7 +186,7 @@ async function selectProjectOnlyMemory(page: Page, dialog: Locator): Promise<voi
   if (!option) {
     throw new WorkspaceProjectError(
       "PROJECT_MEMORY_UNAVAILABLE",
-      "The New Project dialog did not expose Project-only memory."
+      "Project settings did not expose Project-only memory."
     );
   }
 
@@ -348,6 +348,92 @@ async function waitForProjectNameInput(
   );
 }
 
+async function exactProjectOptionsButton(
+  page: Page,
+  projectName: string
+): Promise<Locator | null> {
+  const names = [
+    projectName + " 프로젝트 옵션 열기",
+    "Open project options for " + projectName,
+  ];
+
+  const visible: Locator[] = [];
+  for (const name of names) {
+    const matches = page.getByRole("button", { name, exact: true });
+    const count = await matches.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const candidate = matches.nth(i);
+      if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
+    }
+  }
+
+  if (visible.length > 1) {
+    throw new WorkspaceProjectError(
+      "PROJECT_DESTINATION_MISMATCH",
+      "Multiple visible ChatGPT Projects have the exact expected name; refusing to guess which one belongs to this workspace."
+    );
+  }
+  return visible[0] ?? null;
+}
+
+async function openExistingProjectByExactName(
+  page: Page,
+  projectName: string
+): Promise<string | null> {
+  const options = await exactProjectOptionsButton(page, projectName);
+  if (!options) return null;
+
+  const row = options.locator(
+    "xpath=ancestor::*[self::li or @role='treeitem' or @role='listitem'][1]"
+  );
+  if ((await row.count().catch(() => 0)) === 0) {
+    throw new WorkspaceProjectError(
+      "PROJECT_NAVIGATION_FAILED",
+      "The exact Project was visible, but its sidebar row could not be resolved."
+    );
+  }
+
+  const link = row.locator('a[href*="/g/g-p-"]').first();
+  if (await link.isVisible().catch(() => false)) {
+    const href = await link.getAttribute("href").catch(() => null);
+    const linkedId = canonicalProjectIdFromHref(href);
+    if (linkedId) {
+      await link.press("Enter").catch(() => link.click({ force: true }));
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline) {
+        const observed = extractProjectId(page.url());
+        if (observed === linkedId && (await visibleComposer(page))) return observed;
+        await page.waitForTimeout(200);
+      }
+    }
+  }
+
+  const home = row
+    .locator(
+      'button[aria-label*="project home" i], button[aria-label*="프로젝트 홈"], [role="button"][aria-label*="project home" i], [role="button"][aria-label*="프로젝트 홈"]'
+    )
+    .first();
+  if (!(await home.isVisible().catch(() => false))) {
+    throw new WorkspaceProjectError(
+      "PROJECT_NAVIGATION_FAILED",
+      "The exact Project was visible, but its Open Project Home control could not be found."
+    );
+  }
+
+  await home.press("Enter").catch(() => home.click({ force: true }));
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    const observed = extractProjectId(page.url());
+    if (observed && (await visibleComposer(page))) return observed;
+    await page.waitForTimeout(200);
+  }
+
+  throw new WorkspaceProjectError(
+    "PROJECT_NAVIGATION_FAILED",
+    "Opening the exact existing Project did not reach a usable Project page."
+  );
+}
+
 async function projectRowForId(
   page: Page,
   projectId: string,
@@ -427,57 +513,22 @@ async function openProjectSettings(
 ): Promise<Locator> {
   const direct = page.getByRole("button", { name: PROJECT_SETTINGS_LABEL }).first();
   if (await direct.isVisible().catch(() => false)) {
-    await direct.click();
+    await direct.press("Enter").catch(() => direct.click({ force: true }));
     return waitForProjectSettingsScope(page);
   }
 
-  let menuButton: Locator | null = null;
-  const row = await projectRowForId(page, projectId, projectName);
-  if (row) {
-    for (const selector of [
-      'button[aria-haspopup="menu"]',
-      "button[data-trailing-button]",
-      'button[aria-label*="more" i]',
-      'button[aria-label*="더보기"]',
-    ]) {
-      const candidates = row.locator(selector);
-      const count = await candidates.count().catch(() => 0);
-      for (let i = count - 1; i >= 0; i--) {
-        const candidate = candidates.nth(i);
-        if (await candidate.isVisible().catch(() => false)) {
-          menuButton = candidate;
-          break;
-        }
-      }
-      if (menuButton) break;
-    }
-  }
-
-  if (!menuButton) {
-    const buttons = page.getByRole("button");
-    const count = await buttons.count().catch(() => 0);
-    for (let i = 0; i < count; i++) {
-      const button = buttons.nth(i);
-      if (!(await button.isVisible().catch(() => false))) continue;
-      const label =
-        ((await button.getAttribute("aria-label").catch(() => null)) ?? "") +
-        " " +
-        (await button.innerText().catch(() => ""));
-      if (PROJECT_OPTIONS_LABEL.test(label)) {
-        menuButton = button;
-        break;
-      }
-    }
-  }
-
+  // Fail closed: never fall back to an arbitrary project's options button.
+  // Current ChatGPT labels the exact row button as either
+  // "<name> 프로젝트 옵션 열기" or "Open project options for <name>".
+  const menuButton = await exactProjectOptionsButton(page, projectName);
   if (!menuButton) {
     throw new WorkspaceProjectError(
       "PROJECT_MEMORY_UNAVAILABLE",
-      "Could not find the current Project's options menu."
+      "Could not find the exact current Project's options menu."
     );
   }
 
-  await menuButton.click();
+  await menuButton.press("Enter").catch(() => menuButton.click({ force: true }));
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
     for (const role of ["menuitem", "button"] as const) {
@@ -738,46 +789,53 @@ export class WorkspaceProjectManager {
     });
 
     const page = await this.rootPage();
-    const discovery = await waitForNewProjectControl(page);
-    const newProject = discovery.control;
-    if (!newProject) {
-      throw new WorkspaceProjectError(
-        "PROJECT_CREATE_UNAVAILABLE",
-        discovery.projectsSectionSeen
-          ? "ChatGPT's Projects section is visible, but the New Project control did not appear after waiting for sidebar hydration."
-          : "Could not find ChatGPT's Projects section or New Project control after waiting for sidebar hydration."
-      );
-    }
 
-    const textInputsBefore = await page
-      .locator('input[type="text"]:visible')
-      .count()
-      .catch(() => 0);
-    await newProject.press("Enter").catch(() => newProject.click({ force: true }));
+    // A previous bind attempt may have created the remote Project but failed
+    // before local state was committed (for example while opening Project
+    // settings). Reuse that exact-name Project instead of creating duplicates.
+    let projectId = await openExistingProjectByExactName(page, projectName);
 
-    const nameInput = await waitForProjectNameInput(page, textInputsBefore);
-    await nameInput.fill(projectName);
-    if ((await nameInput.inputValue().catch(() => "")) !== projectName) {
-      throw new WorkspaceProjectError(
-        "PROJECT_CREATE_FAILED",
-        "Could not confirm the project name before creation."
-      );
-    }
+    if (!projectId) {
+      const discovery = await waitForNewProjectControl(page);
+      const newProject = discovery.control;
+      if (!newProject) {
+        throw new WorkspaceProjectError(
+          "PROJECT_CREATE_UNAVAILABLE",
+          discovery.projectsSectionSeen
+            ? "ChatGPT's Projects section is visible, but the New Project control did not appear after waiting for sidebar hydration."
+            : "Could not find ChatGPT's Projects section or New Project control after waiting for sidebar hydration."
+        );
+      }
 
-    await nameInput.press("Enter");
+      const textInputsBefore = await page
+        .locator('input[type="text"]:visible')
+        .count()
+        .catch(() => 0);
+      await newProject.press("Enter").catch(() => newProject.click({ force: true }));
 
-    const deadline = Date.now() + 15_000;
-    let projectId: string | null = null;
-    while (Date.now() < deadline) {
-      projectId = extractProjectId(page.url());
-      if (projectId && (await visibleComposer(page))) break;
-      await page.waitForTimeout(250);
-    }
-    if (!projectId || !isValidProjectId(projectId) || !(await visibleComposer(page))) {
-      throw new WorkspaceProjectError(
-        "PROJECT_CREATE_FAILED",
-        "Project creation did not land on a verifiable Project with a usable composer."
-      );
+      const nameInput = await waitForProjectNameInput(page, textInputsBefore);
+      await nameInput.fill(projectName);
+      if ((await nameInput.inputValue().catch(() => "")) !== projectName) {
+        throw new WorkspaceProjectError(
+          "PROJECT_CREATE_FAILED",
+          "Could not confirm the project name before creation."
+        );
+      }
+
+      await nameInput.press("Enter");
+
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        projectId = extractProjectId(page.url());
+        if (projectId && (await visibleComposer(page))) break;
+        await page.waitForTimeout(250);
+      }
+      if (!projectId || !isValidProjectId(projectId) || !(await visibleComposer(page))) {
+        throw new WorkspaceProjectError(
+          "PROJECT_CREATE_FAILED",
+          "Project creation did not land on a verifiable Project with a usable composer."
+        );
+      }
     }
 
     await configureProjectOnlyMemoryFromSettings(page, projectId, projectName);
