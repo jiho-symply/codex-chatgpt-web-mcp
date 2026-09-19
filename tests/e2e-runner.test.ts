@@ -249,6 +249,85 @@ describe("autonomous E2E runner", () => {
     expect(runner.report(started.runId).markdown).toContain("C1");
   });
 
+  it("marks browser-send dependents NOT_RUN when workspace binding fails", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cgw-e2e-"));
+    dirs.push(stateDir);
+
+    const fakeClient = {
+      async status() {
+        return {
+          authenticated: true,
+          uiReady: true,
+          conversationId: null,
+          projectId: null,
+          headless: false,
+          ui: {
+            state: "ready",
+            message: null,
+            actions: { stop: false, continue: false, retry: false, regenerate: false },
+          },
+        };
+      },
+      async bindWorkspaceProject() {
+        const error = new Error("project missing") as Error & { code?: string };
+        error.code = "PROJECT_NOT_FOUND";
+        throw error;
+      },
+      async capabilities() {
+        return {
+          modelPicker: { found: false, current: null, options: [] },
+          effortPicker: { found: false, current: null, options: [] },
+          flattenedPicker: false,
+        };
+      },
+    } as unknown as ChatGptWebClient;
+
+    const fakeTurns = {
+      async send(input: { workspaceId?: string }) {
+        if (!input.workspaceId) {
+          const error = new Error("workspace required") as Error & { code?: string };
+          error.code = "WORKSPACE_REQUIRED";
+          throw error;
+        }
+        throw new Error("remote send must not run after B1 failure");
+      },
+      async getReply() {
+        const error = new Error("unknown turn") as Error & { code?: string };
+        error.code = "TURN_NOT_FOUND";
+        throw error;
+      },
+    } as unknown as TurnManager;
+
+    const runner = new E2ERunner(
+      fakeClient,
+      fakeTurns,
+      config(stateDir),
+      async (fn) => fn()
+    );
+
+    const started = runner.start({
+      workspaceId: "ws_0123456789abcdef",
+      workspaceName: "CGW-E2E-Test",
+    });
+
+    let latest = runner.status(started.runId);
+    const deadline = Date.now() + 2_000;
+    while (latest.status === "running" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      latest = runner.status(started.runId);
+    }
+
+    expect(latest.status).toBe("completed");
+    expect(latest.tests.find((test) => test.id === "B1")?.status).toBe("FAIL");
+    expect(latest.tests.find((test) => test.id === "E1")?.status).toBe("FAIL");
+    expect(latest.tests.find((test) => test.id === "C1")?.status).toBe("NOT_RUN");
+    expect(latest.tests.find((test) => test.id === "F1")?.status).toBe("NOT_RUN");
+    expect(latest.tests.find((test) => test.id === "G1")?.status).toBe("NOT_RUN");
+    expect(latest.tests.find((test) => test.id === "I1")?.status).toBe("NOT_RUN");
+    expect(latest.tests.find((test) => test.id === "H1")?.status).toBe("PASS");
+    expect(latest.tests.find((test) => test.id === "H2")?.status).toBe("PASS");
+  });
+
   it("stops early and persists BLOCKED when human authentication is required", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cgw-e2e-"));
     dirs.push(stateDir);
