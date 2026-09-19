@@ -195,6 +195,36 @@ async function waitCompleted(
   return latest;
 }
 
+function manifestDiagnostic(turn: TurnView): string {
+  const manifest = turn.manifest;
+  if (!manifest) {
+    return "response=" + JSON.stringify(turn.response ?? null) + "; manifest=null";
+  }
+  const parts = manifest.parts.map((part) => {
+    if (part.type === "code") {
+      return "code(language=" + JSON.stringify(part.language) + ", text=" + JSON.stringify(part.text.slice(0, 160)) + ")";
+    }
+    if (part.type === "table") {
+      return "table(headers=" + JSON.stringify(part.headers) + ", rows=" + JSON.stringify(part.rows.slice(0, 3)) + ")";
+    }
+    if (part.type === "text") {
+      return "text(" + JSON.stringify(part.text.slice(0, 160)) + ")";
+    }
+    return part.type;
+  });
+  return (
+    "response=" +
+    JSON.stringify((turn.response ?? "").slice(0, 500)) +
+    "; plainText=" +
+    JSON.stringify(manifest.plainText.slice(0, 500)) +
+    "; codeBlockCount=" +
+    manifest.codeBlockCount +
+    "; parts=[" +
+    parts.join(", ") +
+    "]"
+  );
+}
+
 function manifestHasStructuredContract(turn: TurnView): boolean {
   const manifest = turn.manifest;
   if (!manifest) return false;
@@ -740,7 +770,8 @@ export class E2ERunner {
           }
           if (!manifestHasStructuredContract(turn)) {
             throw new Error(
-              "Manifest did not contain the required text/code/table contract."
+              "Manifest did not contain the required text/code/table contract. " +
+                manifestDiagnostic(turn)
             );
           }
           if (state.projectId && turn.projectId !== state.projectId) {
