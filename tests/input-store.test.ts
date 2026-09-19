@@ -24,6 +24,8 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     stateDir: "",
     profileDir: "",
     headless: true,
+    browserMode: "playwright",
+    cdpPort: undefined,
     browserChannel: undefined,
     browserExecutable: undefined,
     timeoutMs: 180_000,
