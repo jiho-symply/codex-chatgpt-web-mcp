@@ -225,13 +225,13 @@ function manifestDiagnostic(turn: TurnView): string {
   );
 }
 
-function manifestHasStructuredContract(turn: TurnView): boolean {
+function manifestHasStructuredContract(turn: TurnView, expectedText: string): boolean {
   const manifest = turn.manifest;
   if (!manifest) return false;
   const hasText =
-    manifest.plainText.includes("STRUCTURED_OK") ||
+    manifest.plainText.includes(expectedText) ||
     manifest.parts.some(
-      (part) => part.type === "text" && part.text.includes("STRUCTURED_OK")
+      (part) => part.type === "text" && part.text.includes(expectedText)
     );
   const hasCode = manifest.parts.some(
     (part) =>
@@ -624,323 +624,332 @@ export class E2ERunner {
         return;
       }
 
-      const idemRequest = state.runId + ":idem";
-      let idemTurnId: string | null = null;
-      await this.step(
+      // Keep the real ChatGPT message budget to ONE per E2E run. The same
+      // turn simultaneously exercises idempotency, structured extraction,
+      // attachment upload/readback, explicit current selection, recovery, and
+      // Project isolation. All other checks stay local/read-only.
+      const compactRequest = state.runId + ":compact";
+      const attachmentSentinel = "ATTACHMENT_SENTINEL_7F3A";
+      const selection =
+        state.includeSelection && capabilities
+          ? selectionCandidate(capabilities)
+          : null;
+      let stagedId: string | null = null;
+      let compactTurnId: string | null = null;
+      let compactTurn: TurnView | null = null;
+
+      const compactInput = {
+        requestId: compactRequest,
+        workspaceId: state.workspaceId,
+        prompt:
+          "Read the attached file. Return exactly these three items and nothing else:\n" +
+          "1. The exact contents of the attached file as a single plain-text line.\n" +
+          "2. A fenced python code block containing exactly: print('CGW')\n" +
+          "3. A markdown table with columns A and B and one data row 1 and 2.",
+        ...(selection?.model ? { model: selection.model } : {}),
+        ...(selection?.effort ? { effort: selection.effort } : {}),
+      };
+
+      const compactSent = await this.step(
         state,
         {
           id: "C1",
-          name: "Idempotent send",
-          expected: "second identical request returns same turn with deduplicated=true",
+          name: "Single-send idempotent E2E dispatch",
+          expected:
+            "one real ChatGPT message; second identical request is deduplicated locally",
         },
         async () => {
+          const staged = this.client.stageTextInput({
+            filename: "cgw-e2e-sentinel.txt",
+            content: attachmentSentinel,
+            mime: "text/plain",
+          });
+          stagedId = staged.inputAssetId;
+
           const input = {
-            requestId: idemRequest,
-            workspaceId: state.workspaceId,
-            prompt: "Reply with exactly: IDEMPOTENCY_OK",
+            ...compactInput,
+            inputAssetIds: [staged.inputAssetId],
           };
           const first = await this.exclusive(() => this.turns.send(input));
+          compactTurnId = first.turnId;
           const second = await this.exclusive(() => this.turns.send(input));
           if (!second.deduplicated || first.turnId !== second.turnId) {
-            throw new Error("Duplicate request did not resolve to the same deduplicated turn.");
+            throw new Error(
+              "Duplicate request did not resolve to the same deduplicated turn."
+            );
           }
-          idemTurnId = first.turnId;
           return {
-            observed: "Same turn returned; deduplicated=true.",
-            requestId: idemRequest,
+            observed:
+              "One combined remote turn dispatched; identical retry returned the same turn with deduplicated=true.",
+            requestId: compactRequest,
             turnId: first.turnId,
             projectId: first.projectId,
           };
         }
       );
 
-      if (idemTurnId) {
-        await this.step(
+      if (!compactSent || !compactTurnId) {
+        if (stagedId) this.client.discardStagedInput(stagedId);
+        this.notRun(state, "C2", "Wait for combined E2E response", "completed combined turn", "C1 dispatch failed.");
+        this.notRun(state, "C3", "Request-id conflict is rejected locally", "REQUEST_ID_CONFLICT", "C1 dispatch failed.");
+        this.notRun(state, "D1", "Completed turn recovery", "same completed response", "C1 dispatch failed.");
+        this.notRun(state, "F1", "Structured response extraction", "text + code + table manifest", "C1 dispatch failed.");
+        this.notRun(state, "G1", "Staged text attachment upload and readback", "attached sentinel appears in response", "C1 dispatch failed.");
+        this.notRun(
           state,
-          {
-            id: "C2",
-            name: "Wait for idempotency response",
-            expected: 'completed response exactly "IDEMPOTENCY_OK"',
-          },
-          async () => {
-            const turn = await waitCompleted(this.exclusive, this.turns, idemTurnId!);
-            if (turn.status !== "completed" || turn.response?.trim() !== "IDEMPOTENCY_OK") {
-              throw new Error(
-                "Unexpected turn result: status=" +
-                  turn.status +
-                  ", response=" +
-                  JSON.stringify(turn.response ?? null)
-              );
-            }
-            if (state.projectId && turn.projectId !== state.projectId) {
-              throw new Error("Turn escaped the bound Project.");
-            }
-            return {
-              observed: "Completed with exact response.",
-              requestId: idemRequest,
-              turnId: turn.turnId,
-              projectId: turn.projectId,
-            };
-          }
+          "E2",
+          "Explicit current model/effort selection smoke",
+          "combined send accepts the currently selected explicit model/effort",
+          "C1 dispatch failed."
         );
-
-        await this.step(
+        this.notRun(
           state,
-          {
-            id: "C3",
-            name: "Request-id conflict is rejected locally",
-            expected: "REQUEST_ID_CONFLICT without sending a second prompt",
-          },
-          async () => {
-            try {
-              await this.exclusive(() =>
-                this.turns.send({
-                  requestId: idemRequest,
-                  workspaceId: state.workspaceId,
-                  prompt: "THIS MUST NOT BE SENT",
-                })
-              );
-            } catch (error) {
-              const info = errorInfo(error);
-              if (info.code === "REQUEST_ID_CONFLICT") {
-                return {
-                  observed: "REQUEST_ID_CONFLICT returned before dispatch.",
-                  requestId: idemRequest,
-                  turnId: idemTurnId,
-                  projectId: state.projectId,
-                };
-              }
-              throw error;
-            }
-            throw new Error("Conflicting request_id was unexpectedly accepted.");
-          }
+          "I1",
+          "Workspace Project isolation across E2E sends",
+          "combined real send stays on the bound projectId",
+          "C1 dispatch failed."
         );
+        await this.runLocalSafetyChecks(state);
+        return;
+      }
 
+      await this.step(
+        state,
+        {
+          id: "C2",
+          name: "Wait for combined E2E response",
+          expected: "combined turn completes inside the bound Project",
+        },
+        async () => {
+          compactTurn = await waitCompleted(
+            this.exclusive,
+            this.turns,
+            compactTurnId!
+          );
+          if (compactTurn.status !== "completed") {
+            throw new Error("Combined turn did not complete: " + compactTurn.status);
+          }
+          if (state.projectId && compactTurn.projectId !== state.projectId) {
+            throw new Error("Combined turn escaped the bound Project.");
+          }
+          return {
+            observed: "Combined remote turn completed.",
+            requestId: compactRequest,
+            turnId: compactTurn.turnId,
+            projectId: compactTurn.projectId,
+          };
+        }
+      );
+
+      // Upload is complete once dispatch returns. Remove the local staged copy
+      // before running the purely local/read-only assertions below.
+      if (stagedId) {
+        this.client.discardStagedInput(stagedId);
+        stagedId = null;
+      }
+
+      await this.step(
+        state,
+        {
+          id: "C3",
+          name: "Request-id conflict is rejected locally",
+          expected: "REQUEST_ID_CONFLICT without sending another ChatGPT message",
+        },
+        async () => {
+          try {
+            await this.exclusive(() =>
+              this.turns.send({
+                requestId: compactRequest,
+                workspaceId: state.workspaceId,
+                prompt: "THIS MUST NOT BE SENT",
+              })
+            );
+          } catch (error) {
+            const info = errorInfo(error);
+            if (info.code === "REQUEST_ID_CONFLICT") {
+              return {
+                observed: "REQUEST_ID_CONFLICT returned before dispatch.",
+                requestId: compactRequest,
+                turnId: compactTurnId,
+                projectId: state.projectId,
+              };
+            }
+            throw error;
+          }
+          throw new Error("Conflicting request_id was unexpectedly accepted.");
+        }
+      );
+
+      if (compactTurn?.status === "completed") {
         await this.step(
           state,
           {
             id: "D1",
             name: "Completed turn recovery",
-            expected: "getReply recovers the same completed response",
+            expected: "getReply recovers the same combined response without resending",
           },
           async () => {
-            const turn = await this.exclusive(() => this.turns.getReply(idemTurnId!));
-            if (turn.status !== "completed" || turn.response?.trim() !== "IDEMPOTENCY_OK") {
-              throw new Error("Completed turn could not be recovered exactly.");
+            const recovered = await this.exclusive(() =>
+              this.turns.getReply(compactTurnId!)
+            );
+            if (
+              recovered.status !== "completed" ||
+              recovered.response !== compactTurn!.response
+            ) {
+              throw new Error("Completed combined turn could not be recovered exactly.");
             }
             return {
-              observed: "Recovered completed response without resending.",
-              requestId: idemRequest,
-              turnId: turn.turnId,
-              projectId: turn.projectId,
+              observed: "Recovered the same completed combined turn.",
+              requestId: compactRequest,
+              turnId: recovered.turnId,
+              projectId: recovered.projectId,
             };
           }
         );
-      } else {
-        this.notRun(state, "C2", "Wait for idempotency response", "completed exact response", "C1 failed.");
-        this.notRun(state, "C3", "Request-id conflict is rejected locally", "REQUEST_ID_CONFLICT", "C1 failed.");
-        this.notRun(state, "D1", "Completed turn recovery", "same completed response", "C1 failed.");
-      }
 
-      const structuredRequest = state.runId + ":structured";
-      let structuredTurnId: string | null = null;
-      await this.step(
-        state,
-        {
-          id: "F1",
-          name: "Structured response extraction",
-          expected: "text + python code + markdown table in manifest",
-        },
-        async () => {
-          const sent = await this.exclusive(() =>
-            this.turns.send({
-              requestId: structuredRequest,
-              workspaceId: state.workspaceId,
-              prompt:
-                "Return exactly these three items and nothing else:\n" +
-                "1. The text STRUCTURED_OK\n" +
-                "2. A fenced python code block containing exactly: print('CGW')\n" +
-                "3. A markdown table with columns A and B and one data row 1 and 2.",
-            })
-          );
-          structuredTurnId = sent.turnId;
-          const turn = await waitCompleted(this.exclusive, this.turns, sent.turnId);
-          if (turn.status !== "completed") {
-            throw new Error("Structured turn did not complete: " + turn.status);
-          }
-          if (!manifestHasStructuredContract(turn)) {
-            throw new Error(
-              "Manifest did not contain the required text/code/table contract. " +
-                manifestDiagnostic(turn)
-            );
-          }
-          if (state.projectId && turn.projectId !== state.projectId) {
-            throw new Error("Structured turn escaped the bound Project.");
-          }
-          return {
-            observed: "Manifest contains text, python code, and table parts.",
-            requestId: structuredRequest,
-            turnId: turn.turnId,
-            projectId: turn.projectId,
-          };
-        }
-      );
-
-      const attachmentRequest = state.runId + ":attachment";
-      let stagedId: string | null = null;
-      await this.step(
-        state,
-        {
-          id: "G1",
-          name: "Staged text attachment upload and readback",
-          expected: 'response exactly "ATTACHMENT_SENTINEL_7F3A"',
-        },
-        async () => {
-          const staged = this.client.stageTextInput({
-            filename: "cgw-e2e-sentinel.txt",
-            content: "ATTACHMENT_SENTINEL_7F3A",
-            mime: "text/plain",
-          });
-          stagedId = staged.inputAssetId;
-          try {
-            const sent = await this.exclusive(() =>
-              this.turns.send({
-                requestId: attachmentRequest,
-                workspaceId: state.workspaceId,
-                inputAssetIds: [staged.inputAssetId],
-                prompt: "Read the attached file and reply with exactly its sentinel string.",
-              })
-            );
-            const turn = await waitCompleted(this.exclusive, this.turns, sent.turnId);
-            if (
-              turn.status !== "completed" ||
-              turn.response?.trim() !== "ATTACHMENT_SENTINEL_7F3A"
-            ) {
+        await this.step(
+          state,
+          {
+            id: "F1",
+            name: "Structured response extraction",
+            expected: "attachment text + python code + markdown table in manifest",
+          },
+          async () => {
+            if (!manifestHasStructuredContract(compactTurn!, attachmentSentinel)) {
               throw new Error(
-                "Attachment readback failed: status=" +
-                  turn.status +
-                  ", response=" +
-                  JSON.stringify(turn.response ?? null)
+                "Manifest did not contain the required text/code/table contract. " +
+                  manifestDiagnostic(compactTurn!)
               );
             }
-            if (state.projectId && turn.projectId !== state.projectId) {
-              throw new Error("Attachment turn escaped the bound Project.");
+            return {
+              observed: "Combined manifest contains text, python code, and table parts.",
+              requestId: compactRequest,
+              turnId: compactTurnId,
+              projectId: compactTurn!.projectId,
+            };
+          }
+        );
+
+        await this.step(
+          state,
+          {
+            id: "G1",
+            name: "Staged text attachment upload and readback",
+            expected: "response contains the sentinel that appeared only in the attachment",
+          },
+          async () => {
+            const body =
+              compactTurn!.manifest?.plainText ??
+              compactTurn!.response ??
+              "";
+            if (!body.includes(attachmentSentinel)) {
+              throw new Error(
+                "Combined response did not reproduce the attached sentinel. " +
+                  manifestDiagnostic(compactTurn!)
+              );
             }
             return {
-              observed: "Attachment staged, uploaded, and read back exactly.",
-              requestId: attachmentRequest,
-              turnId: turn.turnId,
-              projectId: turn.projectId,
+              observed: "Attached sentinel was read back in the combined response.",
+              requestId: compactRequest,
+              turnId: compactTurnId,
+              projectId: compactTurn!.projectId,
             };
-          } finally {
-            if (stagedId) this.client.discardStagedInput(stagedId);
           }
-        }
-      );
+        );
 
-      await this.runLocalSafetyChecks(state);
-
-      if (state.includeSelection && capabilities) {
-        const candidate = selectionCandidate(capabilities);
-        if (!candidate?.model) {
+        if (state.includeSelection) {
+          if (!selection?.model) {
+            this.notRun(
+              state,
+              "E2",
+              "Explicit current model/effort selection smoke",
+              "combined send explicitly names the current visible selection",
+              "Current model could not be mapped exactly to a visible option."
+            );
+          } else {
+            await this.step(
+              state,
+              {
+                id: "E2",
+                name: "Explicit current model/effort selection smoke",
+                expected:
+                  "the same combined send succeeds with explicit current model/effort metadata",
+              },
+              async () => {
+                if (compactTurn!.requestedModel !== selection.model) {
+                  throw new Error(
+                    "requestedModel mismatch: expected " +
+                      selection.model +
+                      ", got " +
+                      String(compactTurn!.requestedModel)
+                  );
+                }
+                if (
+                  selection.effort &&
+                  compactTurn!.requestedEffort !== selection.effort
+                ) {
+                  throw new Error(
+                    "requestedEffort mismatch: expected " +
+                      selection.effort +
+                      ", got " +
+                      String(compactTurn!.requestedEffort)
+                  );
+                }
+                return {
+                  observed:
+                    "Combined send accepted explicit current selection: model=" +
+                    selection.model +
+                    (selection.effort ? ", effort=" + selection.effort : ""),
+                  requestId: compactRequest,
+                  turnId: compactTurnId,
+                  projectId: compactTurn!.projectId,
+                };
+              }
+            );
+          }
+        } else {
           this.notRun(
             state,
             "E2",
             "Explicit current model/effort selection smoke",
-            "one short send using the currently selected visible option",
-            "Current model could not be mapped exactly to a visible option."
-          );
-        } else {
-          const requestId = state.runId + ":selection";
-          await this.step(
-            state,
-            {
-              id: "E2",
-              name: "Explicit current model/effort selection smoke",
-              expected: 'completed response exactly "SELECTION_OK"',
-            },
-            async () => {
-              const sent = await this.exclusive(() =>
-                this.turns.send({
-                  requestId,
-                  workspaceId: state.workspaceId,
-                  prompt: "Reply with exactly: SELECTION_OK",
-                  model: candidate.model,
-                  ...(candidate.effort ? { effort: candidate.effort } : {}),
-                })
-              );
-              const turn = await waitCompleted(this.exclusive, this.turns, sent.turnId);
-              if (turn.status !== "completed" || turn.response?.trim() !== "SELECTION_OK") {
-                throw new Error(
-                  "Explicit selection turn failed: status=" +
-                    turn.status +
-                    ", response=" +
-                    JSON.stringify(turn.response ?? null)
-                );
-              }
-              return {
-                observed:
-                  "Explicit current selection succeeded: model=" +
-                  candidate.model +
-                  (candidate.effort ? ", effort=" + candidate.effort : ""),
-                requestId,
-                turnId: turn.turnId,
-                projectId: turn.projectId,
-              };
-            }
+            "combined send explicitly names the current selection",
+            "Disabled by caller."
           );
         }
-      } else {
-        this.notRun(
-          state,
-          "E2",
-          "Explicit current model/effort selection smoke",
-          "one short send using the current selection",
-          state.includeSelection ? "Capabilities unavailable." : "Disabled by caller."
-        );
-      }
 
-      // Aggregate isolation is meaningful only if at least one real browser send
-      // actually succeeded and returned a projectId.
-      const realSendIds = ["C1", "C2", "D1", "F1", "G1", "E2"];
-      const observedRealSends = state.tests.filter(
-        (test) =>
-          test.status === "PASS" &&
-          Boolean(test.projectId) &&
-          realSendIds.includes(test.id)
-      );
-      const escaped = observedRealSends.filter(
-        (test) => state.projectId && test.projectId !== state.projectId
-      );
-
-      if (!state.projectId || observedRealSends.length === 0) {
-        this.notRun(
+        await this.step(
           state,
-          "I1",
-          "Workspace Project isolation across E2E sends",
-          "every real send stays on the bound projectId",
-          "No successful real send was available for an isolation assertion."
-        );
-      } else {
-        this.append(
-          state,
-          testResult({
+          {
             id: "I1",
             name: "Workspace Project isolation across E2E sends",
-            status: escaped.length === 0 ? "PASS" : "FAIL",
-            expected: "every real send stays on the bound projectId",
-            observed:
-              escaped.length === 0
-                ? "All successful observed sends stayed on the bound Project."
-                : "Escaped tests: " + escaped.map((test) => test.id).join(", "),
-            errorCode: escaped.length === 0 ? null : "PROJECT_DESTINATION_MISMATCH",
-            errorMessage: escaped.length === 0 ? null : "One or more E2E turns used another Project.",
-            requestId: null,
-            turnId: structuredTurnId,
-            projectId: state.projectId,
-          })
+            expected: "the single combined real send stays on the bound projectId",
+          },
+          async () => {
+            if (!state.projectId || compactTurn!.projectId !== state.projectId) {
+              throw new Error(
+                "Combined turn project mismatch: expected " +
+                  String(state.projectId) +
+                  ", got " +
+                  String(compactTurn!.projectId)
+              );
+            }
+            return {
+              observed: "The combined real send stayed on the bound Project.",
+              requestId: compactRequest,
+              turnId: compactTurnId,
+              projectId: compactTurn!.projectId,
+            };
+          }
         );
+      } else {
+        this.notRun(state, "D1", "Completed turn recovery", "same completed response", "C2 did not produce a completed turn.");
+        this.notRun(state, "F1", "Structured response extraction", "text + code + table manifest", "C2 did not produce a completed turn.");
+        this.notRun(state, "G1", "Staged text attachment upload and readback", "attached sentinel appears in response", "C2 did not produce a completed turn.");
+        this.notRun(state, "E2", "Explicit current model/effort selection smoke", "combined send accepts explicit current selection", "C2 did not produce a completed turn.");
+        this.notRun(state, "I1", "Workspace Project isolation across E2E sends", "combined real send stays on the bound projectId", "C2 did not produce a completed turn.");
       }
+
+      await this.runLocalSafetyChecks(state);
     } catch (error) {
       const info = errorInfo(error);
       this.append(
