@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   browserLaunchCandidates,
+  systemCdpLaunchArgs,
   windowsDefaultBrowserFamilyFromRegistryOutput,
 } from "../src/browser/runtime.js";
 
@@ -114,4 +115,19 @@ describe("browser launch candidates", () => {
       })
     ).toEqual([{ label: "configured browser channel", channel: "chrome" }]);
   });
+  it("launches system Chrome without WebDriver-style automation flags", () => {
+    const args = systemCdpLaunchArgs("C:\\CGW\\profile", 9333);
+    expect(args).toEqual([
+      "--user-data-dir=C:\\CGW\\profile",
+      "--remote-debugging-port=9333",
+      "https://chatgpt.com",
+    ]);
+    expect(args.some((arg) => arg === "--headless" || arg === "--enable-automation" || arg === "--no-sandbox")).toBe(false);
+    expect(args).not.toContain("--remote-debugging-port=0");
+  });
+
+  it("rejects port zero for system-CDP", () => {
+    expect(() => systemCdpLaunchArgs("C:\\CGW\\profile", 0)).toThrow(/non-zero/i);
+  });
+
 });
