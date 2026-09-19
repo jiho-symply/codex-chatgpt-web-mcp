@@ -58,6 +58,9 @@ const PROJECT_SETTINGS_LABEL = /project settings|프로젝트 설정/i;
 const PROJECT_OPTIONS_LABEL =
   /project options|project menu|more options|more|프로젝트 옵션|프로젝트 메뉴|더보기/i;
 const SAVE_LABEL = /^(save|저장)$/i;
+const PROJECTS_SECTION_LABEL = /^(projects|프로젝트)$/i;
+const OPEN_SIDEBAR_LABEL =
+  /open sidebar|show sidebar|사이드바 열기|사이드바 표시/i;
 
 async function firstVisible(
   scope: Page | Locator,
@@ -231,7 +234,7 @@ function sameDisplayName(a: string, b: string): boolean {
 }
 
 
-async function visibleNewProjectControl(page: Page): Promise<Locator | null> {
+async function findNewProjectControl(page: Page): Promise<Locator | null> {
   const exact = await firstVisible(page, NEW_PROJECT_SELECTORS);
   if (exact) return exact;
 
@@ -250,6 +253,77 @@ async function visibleNewProjectControl(page: Page): Promise<Locator | null> {
     if (/new project|새 프로젝트/i.test(label)) return control;
   }
   return null;
+}
+
+async function maybeOpenSidebar(page: Page): Promise<void> {
+  const button = page.getByRole("button", { name: OPEN_SIDEBAR_LABEL }).first();
+  if (await button.isVisible().catch(() => false)) {
+    await button.click().catch(() => undefined);
+    await page.waitForTimeout(150);
+  }
+}
+
+async function maybeExpandProjectsSection(page: Page): Promise<boolean> {
+  const candidates = page.getByText(PROJECTS_SECTION_LABEL, { exact: true });
+  const count = await candidates.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    const text = candidates.nth(i);
+    if (!(await text.isVisible().catch(() => false))) continue;
+
+    const button = text.locator("xpath=ancestor-or-self::button[1]");
+    if ((await button.count().catch(() => 0)) > 0) {
+      const expanded = await button.getAttribute("aria-expanded").catch(() => null);
+      if (expanded === "false") {
+        await button.click().catch(() => undefined);
+        await page.waitForTimeout(150);
+      }
+      return true;
+    }
+
+    const row = text.locator(
+      "xpath=ancestor::*[@role='button' or @role='treeitem' or @role='listitem'][1]"
+    );
+    if ((await row.count().catch(() => 0)) > 0) {
+      const expanded = await row.getAttribute("aria-expanded").catch(() => null);
+      if (expanded === "false") {
+        await row.click().catch(() => undefined);
+        await page.waitForTimeout(150);
+      }
+      return true;
+    }
+
+    return true;
+  }
+  return false;
+}
+
+async function waitForNewProjectControl(
+  page: Page,
+  timeoutMs = 8_000
+): Promise<{ control: Locator | null; projectsSectionSeen: boolean }> {
+  const deadline = Date.now() + timeoutMs;
+  let projectsSectionSeen = false;
+  let prepared = false;
+
+  while (Date.now() < deadline) {
+    const control = await findNewProjectControl(page);
+    if (control) return { control, projectsSectionSeen };
+
+    if (!prepared) {
+      await maybeOpenSidebar(page);
+      prepared = true;
+    }
+
+    projectsSectionSeen =
+      (await maybeExpandProjectsSection(page)) || projectsSectionSeen;
+
+    const afterExpand = await findNewProjectControl(page);
+    if (afterExpand) return { control: afterExpand, projectsSectionSeen };
+
+    await page.waitForTimeout(250);
+  }
+
+  return { control: null, projectsSectionSeen };
 }
 
 async function waitForProjectNameInput(
@@ -664,11 +738,14 @@ export class WorkspaceProjectManager {
     });
 
     const page = await this.rootPage();
-    const newProject = await visibleNewProjectControl(page);
+    const discovery = await waitForNewProjectControl(page);
+    const newProject = discovery.control;
     if (!newProject) {
       throw new WorkspaceProjectError(
         "PROJECT_CREATE_UNAVAILABLE",
-        "Could not find ChatGPT's New Project control."
+        discovery.projectsSectionSeen
+          ? "ChatGPT's Projects section is visible, but the New Project control did not appear after waiting for sidebar hydration."
+          : "Could not find ChatGPT's Projects section or New Project control after waiting for sidebar hydration."
       );
     }
 
