@@ -42,6 +42,10 @@ import {
 import { CHATGPT_ORIGIN, type AppConfig } from "../config.js";
 import { BrowserRuntime } from "./runtime.js";
 import {
+  composerNeedsAttachmentReset,
+  type ComposerResidueSnapshot,
+} from "./composer-cleanup.js";
+import {
   WorkspaceProjectManager,
   WorkspaceProjectError,
 } from "../projects/browser.js";
@@ -64,6 +68,7 @@ export type ChatGptErrorCode =
   | "CONVERSATION_BUSY"
   | "UPLOAD_UNAVAILABLE"
   | "UPLOAD_UNCONFIRMED"
+  | "COMPOSER_NOT_CLEAN"
   | "ASSET_UNSAFE_ORIGIN"
   | "ASSET_RETRIEVAL_UNSUPPORTED";
 
@@ -751,6 +756,103 @@ export class ChatGptWebClient {
     return composer.locator("xpath=..");
   }
 
+  private async composerResidue(
+    page: Page
+  ): Promise<ComposerResidueSnapshot> {
+    const scope = await this.composerScope(page);
+    const attachmentChipCount = await scope
+      .locator(ATTACHMENT_CHIP_SELECTOR)
+      .count()
+      .catch(() => 0);
+    const attachmentRemoveControlCount = await scope
+      .locator(ATTACHMENT_REMOVE_SELECTOR)
+      .count()
+      .catch(() => 0);
+    const attachedFileCount = await scope
+      .locator('input[type="file"]')
+      .evaluateAll((nodes) =>
+        nodes.reduce(
+          (total, node) =>
+            total + ((node as HTMLInputElement).files?.length ?? 0),
+          0
+        )
+      )
+      .catch(() => 0);
+
+    return {
+      attachmentChipCount,
+      attachmentRemoveControlCount,
+      attachedFileCount,
+    };
+  }
+
+  private async clearComposerText(page: Page): Promise<void> {
+    let composer = await this.requireComposer(page);
+
+    const read = async (): Promise<string> => {
+      const value = await composer.inputValue().catch(() => null);
+      if (value !== null) return value;
+      return composer.innerText().catch(() => "");
+    };
+
+    if (!normalizeText(await read())) return;
+
+    await composer.fill("").catch(() => undefined);
+    await page.waitForTimeout(50);
+    if (!normalizeText(await read())) return;
+
+    // Fallback for contenteditable variants that occasionally ignore fill("")
+    // during a React re-render.
+    composer = await this.requireComposer(page);
+    await composer.focus().catch(() => undefined);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.keyboard.press("Backspace");
+    await page.waitForTimeout(50);
+
+    const remaining = normalizeText(await read());
+    if (remaining) {
+      throw new ChatGptWebError(
+        "COMPOSER_NOT_CLEAN",
+        "Could not clear the existing ChatGPT composer draft before sending a new prompt."
+      );
+    }
+  }
+
+  private async prepareComposerForSend(page: Page): Promise<void> {
+    await this.requireComposer(page);
+
+    const before = await this.composerResidue(page);
+    if (composerNeedsAttachmentReset(before)) {
+      // Do not click individual remove buttons. A live-tested ChatGPT failure
+      // mode leaves the file input accepting files while the attachment chip
+      // never renders again after removal. Reloading the same Project page is
+      // the reliable reset.
+      await page.reload({
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+      await this.requireComposer(page);
+      await page.waitForTimeout(250);
+
+      const after = await this.composerResidue(page);
+      if (composerNeedsAttachmentReset(after)) {
+        throw new ChatGptWebError(
+          "COMPOSER_NOT_CLEAN",
+          "Could not clear existing ChatGPT attachments before sending. " +
+            "Remaining evidence: chips=" +
+            after.attachmentChipCount +
+            ", removeControls=" +
+            after.attachmentRemoveControlCount +
+            ", attachedFiles=" +
+            after.attachedFileCount +
+            "."
+        );
+      }
+    }
+
+    await this.clearComposerText(page);
+  }
+
   private async uploadInputBatch(
     page: Page,
     uploadInput: Locator,
@@ -870,12 +972,6 @@ export class ChatGptWebClient {
   private async uploadInputs(page: Page, assets: ResolvedInputAsset[]): Promise<void> {
     if (assets.length === 0) return;
 
-    const stale = page.locator(ATTACHMENT_REMOVE_SELECTOR).filter({ visible: true });
-    if ((await stale.count().catch(() => 0)) > 0) {
-      await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
-      await this.requireComposer(page);
-    }
-
     const ui = await detectChatGptUiState(page);
     throwForUiState(ui);
     if (ui.state === "generating" || ui.state === "paused") {
@@ -965,9 +1061,22 @@ export class ChatGptWebClient {
       );
     }
 
-    // Attach first. A stale attachment from a previous failed send may require
-    // a page reload to recover ChatGPT's composer; filling the prompt before
-    // that reload would silently discard the prompt.
+    // Always sanitize the composer before a new send. This clears an abandoned
+    // draft and resets every stale attachment even when the new turn has no
+    // attachments of its own.
+    await this.prepareComposerForSend(page);
+
+    if (expectedProjectId && extractProjectId(page.url()) !== expectedProjectId) {
+      throw new WorkspaceProjectError(
+        "PROJECT_DESTINATION_MISMATCH",
+        "Composer cleanup left the workspace's bound ChatGPT Project."
+      );
+    }
+    if (input.workspaceId) {
+      await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
+    }
+
+    // Attach only after the old composer state is clean.
     await this.uploadInputs(page, resolvedInputs);
 
     if (expectedProjectId && extractProjectId(page.url()) !== expectedProjectId) {
@@ -980,8 +1089,9 @@ export class ChatGptWebClient {
       await this.projectManager.assertPageBoundToWorkspace(page, input.workspaceId);
     }
 
-    // Selection and prompt entry happen after attachment recovery so any
-    // reload/reset cannot erase them.
+    // Upload/recovery may have re-rendered the editor. Clear the draft one more
+    // time immediately before applying the explicit selection and new prompt.
+    await this.clearComposerText(page);
     await this.applySelections(page, input.model, input.effort);
     const composer = await this.requireComposer(page);
     const baselineAssistantCount = await page.locator(ASSISTANT_MESSAGE_SELECTOR).count();
