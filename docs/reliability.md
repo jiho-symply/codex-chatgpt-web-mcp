@@ -104,6 +104,7 @@ turns are not silently evicted.
 | `MODEL_UNAVAILABLE` | Exact requested model is not selectable |
 | `EFFORT_UNAVAILABLE` | Exact requested effort is not selectable |
 | `UI_CHANGED` | Required ChatGPT UI control cannot be identified safely |
+| `COMPOSER_NOT_CLEAN` | Existing draft/attachment state could not be cleared safely before send |
 | `PROFILE_BUSY` | Another process owns the persistent browser profile |
 | `BROWSER_NOT_INSTALLED` | Playwright Chromium is unavailable |
 | `REQUEST_ID_CONFLICT` | Idempotency key was reused with different inputs |
