@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { CHATGPT_ORIGIN, type AppConfig } from "../config.js";
 import { ProfileLock } from "./profile-lock.js";
+import { EVALUATE_NAME_SHIM } from "./eval-shim.js";
 
 export type BrowserRuntimeErrorCode = "PROFILE_BUSY" | "BROWSER_NOT_INSTALLED";
 
@@ -279,6 +280,25 @@ export class BrowserRuntime {
     return this.config.browserMode === "system-cdp" ? false : this.config.headless;
   }
 
+  private async installEvaluationShim(context: BrowserContext): Promise<void> {
+    // tsx/esbuild can inject calls to a helper named __name into functions that
+    // Playwright serializes into the page. The helper exists in Node's
+    // transformed module scope, not in the browser page, so locator.evaluate()
+    // would otherwise fail with ReferenceError: __name is not defined.
+    //
+    // Keep the injected script as plain text so tsx cannot transform it too.
+    await context.addInitScript(EVALUATE_NAME_SHIM);
+    await Promise.all(
+      context.pages().map((page) =>
+        page.evaluate(EVALUATE_NAME_SHIM).catch(() => undefined)
+      )
+    );
+  }
+
+  private async ensureEvaluationShim(page: Page): Promise<void> {
+    await page.evaluate(EVALUATE_NAME_SHIM);
+  }
+
   private releaseLock(): void {
     const lock = this.lock;
     this.lock = null;
@@ -334,6 +354,7 @@ export class BrowserRuntime {
       this.browser = browser;
       this.context = context;
       context.setDefaultTimeout(15_000);
+      await this.installEvaluationShim(context);
       browser.once("disconnected", () => this.clearConnectedState(browser));
       return context;
     } catch (error) {
@@ -368,6 +389,7 @@ export class BrowserRuntime {
           );
           const lock = this.lock;
           this.context = context;
+          await this.installEvaluationShim(context);
           context.once("close", () => {
             if (this.context === context) this.context = null;
             if (lock && this.lock === lock) {
@@ -422,7 +444,9 @@ export class BrowserRuntime {
 
   async newPage(): Promise<Page> {
     const context = await this.start();
-    return context.newPage();
+    const page = await context.newPage();
+    await this.ensureEvaluationShim(page);
+    return page;
   }
 
   async page(): Promise<Page> {
@@ -436,9 +460,17 @@ export class BrowserRuntime {
         return false;
       }
     });
-    if (chatPage) return chatPage;
-    if (pages[0]) return pages[0];
-    return context.newPage();
+    if (chatPage) {
+      await this.ensureEvaluationShim(chatPage);
+      return chatPage;
+    }
+    if (pages[0]) {
+      await this.ensureEvaluationShim(pages[0]);
+      return pages[0];
+    }
+    const page = await context.newPage();
+    await this.ensureEvaluationShim(page);
+    return page;
   }
 
   async close(): Promise<void> {
