@@ -368,7 +368,7 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
       description:
         "Start a persistent background E2E run that tests workspace binding, idempotency, recovery, structured extraction, attachment upload, failure contracts, project isolation, and optionally explicit current model/effort selection. " +
         "The run continues inside the MCP server even if the agent stops reasoning. Poll chatgpt_e2e_status or call chatgpt_e2e_latest later; the report is checkpointed to private CGW state after every test. " +
-        "This sends a small number of deterministic test prompts to the user's ChatGPT account and never deletes non-test Projects.",
+        "The default suite sends at most one real ChatGPT message, waits through its configured preflight/cross-run pacing window, and stops rather than retrying through a visible usage/rate limit. Never manually reproduce or accelerate the individual remote tests.",
       inputSchema: {
         workspace_id: z.string().regex(/^ws_[A-Fa-f0-9]{12,64}$/),
         workspace_name: z.string().min(1).max(80).optional(),
