@@ -209,13 +209,21 @@ function isProfileBusyError(message: string): boolean {
   return /already in use|profile.*use/i.test(message);
 }
 
-export function systemCdpLaunchArgs(profileDir: string, port: number): string[] {
+export function systemCdpLaunchArgs(
+  profileDir: string,
+  port: number,
+  platform: NodeJS.Platform = process.platform
+): string[] {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error("System-CDP requires a fixed non-zero TCP port.");
   }
   return [
     "--user-data-dir=" + profileDir,
     "--remote-debugging-port=" + port,
+    // Existing Chrome + CDP input can inherit Windows' fractional DPI scale
+    // and land trusted pointer events off-target. Normalize the dedicated CGW
+    // browser to a 1:1 CSS/CDP coordinate space on Windows.
+    ...(platform === "win32" ? ["--force-device-scale-factor=1"] : []),
     CHATGPT_ORIGIN,
   ];
 }
