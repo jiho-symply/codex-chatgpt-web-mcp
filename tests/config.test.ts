@@ -11,6 +11,8 @@ const oldTimeout = process.env.CGW_TIMEOUT_MS;
 const oldStable = process.env.CGW_STABLE_MS;
 const oldRequireWorkspace = process.env.CGW_REQUIRE_WORKSPACE_PROJECT;
 const oldBrowserExecutable = process.env.CGW_BROWSER_EXECUTABLE;
+const oldBrowserMode = process.env.CGW_BROWSER_MODE;
+const oldCdpPort = process.env.CGW_CDP_PORT;
 
 afterEach(() => {
   if (oldState === undefined) delete process.env.CGW_STATE_DIR;
@@ -25,6 +27,10 @@ afterEach(() => {
   else process.env.CGW_REQUIRE_WORKSPACE_PROJECT = oldRequireWorkspace;
   if (oldBrowserExecutable === undefined) delete process.env.CGW_BROWSER_EXECUTABLE;
   else process.env.CGW_BROWSER_EXECUTABLE = oldBrowserExecutable;
+  if (oldBrowserMode === undefined) delete process.env.CGW_BROWSER_MODE;
+  else process.env.CGW_BROWSER_MODE = oldBrowserMode;
+  if (oldCdpPort === undefined) delete process.env.CGW_CDP_PORT;
+  else process.env.CGW_CDP_PORT = oldCdpPort;
 
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
   dirs.length = 0;
@@ -38,6 +44,8 @@ describe("config", () => {
     process.env.CGW_HEADLESS = "false";
     process.env.CGW_TIMEOUT_MS = "45000";
     process.env.CGW_STABLE_MS = "7000";
+    process.env.CGW_BROWSER_MODE = "system-cdp";
+    process.env.CGW_CDP_PORT = "9333";
 
     const config = loadConfig();
     expect(config.stateDir).toBe(dir);
@@ -45,6 +53,8 @@ describe("config", () => {
     expect(config.headless).toBe(false);
     expect(config.timeoutMs).toBe(45_000);
     expect(config.stableMs).toBe(7_000);
+    expect(config.browserMode).toBe("system-cdp");
+    expect(config.cdpPort).toBe(9333);
     expect(config.maxAssetBytes).toBe(25 * 1024 * 1024);
     expect(config.maxInlineBlobBytes).toBe(1024 * 1024);
     expect(config.requireWorkspaceProject).toBe(true);
