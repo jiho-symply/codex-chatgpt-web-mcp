@@ -17,6 +17,7 @@ import { WorkspaceProjectError } from "../projects/browser.js";
 import { WorkspaceProjectStoreError } from "../projects/store.js";
 import { SerialQueue } from "../util/serial.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
+import { E2ERunner } from "../e2e/runner.js";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -202,6 +203,41 @@ function capabilityPayload(value: ChatGptCapabilities) {
   };
 }
 
+const e2eTestSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: z.enum(["PASS", "FAIL", "BLOCKED", "NOT_RUN"]),
+  durationMs: z.number().int().nonnegative(),
+  expected: z.string(),
+  observed: z.string(),
+  errorCode: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  requestId: z.string().nullable(),
+  turnId: z.string().nullable(),
+  projectId: z.string().nullable(),
+});
+
+const e2eRunSchema = z.object({
+  version: z.literal(1),
+  runId: z.string(),
+  status: z.enum(["running", "completed", "blocked", "interrupted"]),
+  workspaceId: z.string(),
+  workspaceName: z.string().nullable(),
+  includeSelection: z.boolean(),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  completedAt: z.string().nullable(),
+  projectId: z.string().nullable(),
+  tests: z.array(e2eTestSchema),
+  summary: z.object({
+    pass: z.number().int().nonnegative(),
+    fail: z.number().int().nonnegative(),
+    blocked: z.number().int().nonnegative(),
+    notRun: z.number().int().nonnegative(),
+  }),
+  reportPath: z.string(),
+});
+
 function completedChatPayload(turn: TurnView): Record<string, unknown> | null {
   if (turn.status !== "completed" || typeof turn.response !== "string") return null;
   return {
@@ -224,6 +260,7 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
   const client = new ChatGptWebClient(runtime, config);
   const turns = new TurnManager(client, new TurnStore(config.stateDir));
   const queue = new SerialQueue();
+  const e2e = new E2ERunner(client, turns, config, (fn) => queue.run(fn));
 
   const server = new McpServer(
     { name: PRODUCT_NAME, version: VERSION },
@@ -318,6 +355,106 @@ export async function runMcpServer(config: AppConfig): Promise<void> {
             })
           )
         );
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_e2e_start",
+    {
+      title: "Start autonomous CGW E2E suite",
+      description:
+        "Start a persistent background E2E run that tests workspace binding, idempotency, recovery, structured extraction, attachment upload, failure contracts, project isolation, and optionally explicit current model/effort selection. " +
+        "The run continues inside the MCP server even if the agent stops reasoning. Poll chatgpt_e2e_status or call chatgpt_e2e_latest later; the report is checkpointed to private CGW state after every test. " +
+        "This sends a small number of deterministic test prompts to the user's ChatGPT account and never deletes non-test Projects.",
+      inputSchema: {
+        workspace_id: z.string().regex(/^ws_[A-Fa-f0-9]{12,64}$/),
+        workspace_name: z.string().min(1).max(80).optional(),
+        include_selection: z.boolean().default(true),
+      },
+      outputSchema: e2eRunSchema.shape,
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args) => {
+      try {
+        return ok(
+          e2e.start({
+            workspaceId: args.workspace_id,
+            ...(args.workspace_name ? { workspaceName: args.workspace_name } : {}),
+            includeSelection: args.include_selection,
+          })
+        );
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_e2e_status",
+    {
+      title: "Get CGW E2E run status",
+      description:
+        "Read the persisted checkpoint for one autonomous E2E run. Does not send prompts or touch the browser.",
+      inputSchema: {
+        run_id: z.string().regex(/^e2e_[a-f0-9]{16}$/),
+      },
+      outputSchema: e2eRunSchema.shape,
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      try {
+        return ok(e2e.status(args.run_id));
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_e2e_latest",
+    {
+      title: "Get latest CGW E2E run",
+      description:
+        "Recover the most recent persisted E2E run even if the agent forgot the run_id. Does not send prompts or touch the browser.",
+      inputSchema: {},
+      outputSchema: {
+        found: z.boolean(),
+        run: e2eRunSchema.nullable(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      try {
+        const run = e2e.latest();
+        return ok({ found: Boolean(run), run });
+      } catch (error) {
+        return mapError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "chatgpt_e2e_report",
+    {
+      title: "Get CGW E2E Markdown report",
+      description:
+        "Return the persisted final/intermediate Markdown report for an E2E run. No browser action is performed.",
+      inputSchema: {
+        run_id: z.string().regex(/^e2e_[a-f0-9]{16}$/),
+      },
+      outputSchema: {
+        run: e2eRunSchema,
+        markdown: z.string(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      try {
+        const report = e2e.report(args.run_id);
+        return ok({ run: report.state, markdown: report.markdown });
       } catch (error) {
         return mapError(error);
       }
