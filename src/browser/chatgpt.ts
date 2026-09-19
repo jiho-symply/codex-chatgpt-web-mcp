@@ -8,6 +8,10 @@ import {
   EFFORT_PICKER_SELECTORS,
   FILE_ASSET_SELECTOR,
   IMAGE_ASSET_SELECTOR,
+  INTELLIGENCE_EFFORT_SLIDER_SELECTOR,
+  INTELLIGENCE_MENU_SELECTOR,
+  INTELLIGENCE_MODEL_OPTION_SELECTOR,
+  INTELLIGENCE_PICKER_SELECTORS,
   MODEL_PICKER_SELECTORS,
   PICKER_OPTION_SELECTOR,
   PROMPT_SELECTORS,
@@ -125,6 +129,32 @@ async function firstVisible(page: Page, selectors: readonly string[]): Promise<L
   return null;
 }
 
+async function firstVisibleWithin(
+  scope: Locator,
+  selectors: readonly string[]
+): Promise<Locator | null> {
+  for (const selector of selectors) {
+    const locator = scope.locator(selector).first();
+    if (await locator.isVisible().catch(() => false)) return locator;
+  }
+  return null;
+}
+
+async function composerForm(page: Page): Promise<Locator> {
+  const composer = await waitForFirstVisible(page, PROMPT_SELECTORS, 15_000);
+  if (!composer) {
+    const ui = await detectChatGptUiState(page);
+    throwForUiState(ui);
+    throw new ChatGptWebError(
+      "UI_CHANGED",
+      "Could not find the ChatGPT prompt composer. The web UI may have changed."
+    );
+  }
+  const form = composer.locator("xpath=ancestor::form[1]");
+  if ((await form.count().catch(() => 0)) > 0) return form.first();
+  return composer.locator("xpath=..");
+}
+
 async function firstExisting(page: Page, selectors: readonly string[]): Promise<Locator | null> {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -169,11 +199,12 @@ function throwForUiState(ui: ChatGptUiSnapshot): void {
 }
 
 async function pickerInfo(page: Page, selectors: readonly string[]): Promise<PickerInfo> {
-  const button = await firstVisible(page, selectors);
+  const form = await composerForm(page);
+  const button = await firstVisibleWithin(form, selectors);
   if (!button) return { found: false, current: null, options: [] };
 
   const current = normalizeText(await button.innerText().catch(() => ""));
-  await button.click();
+  await button.press("Enter").catch(() => undefined);
   try {
     await page.waitForTimeout(150);
     const values = await page.locator(PICKER_OPTION_SELECTOR).allInnerTexts();
@@ -187,13 +218,94 @@ async function pickerInfo(page: Page, selectors: readonly string[]): Promise<Pic
   }
 }
 
+async function modernIntelligenceCapabilities(
+  page: Page,
+  button: Locator
+): Promise<ChatGptCapabilities> {
+  const controlText = normalizeText(await button.innerText().catch(() => ""));
+  await button.press("Enter").catch(() => undefined);
+
+  const deadline = Date.now() + 3_000;
+  let menuVisible = false;
+  while (Date.now() < deadline) {
+    menuVisible = await page
+      .locator(INTELLIGENCE_MENU_SELECTOR)
+      .filter({ visible: true })
+      .last()
+      .isVisible()
+      .catch(() => false);
+    if (menuVisible) break;
+    await page.waitForTimeout(50);
+  }
+
+  if (!menuVisible) {
+    await button.click({ force: true }).catch(() => undefined);
+    await page.waitForTimeout(150);
+  }
+
+  try {
+    const optionLocator = page
+      .locator(INTELLIGENCE_MODEL_OPTION_SELECTOR)
+      .filter({ visible: true });
+    const modelOptions = uniqueOptions(await optionLocator.allInnerTexts().catch(() => []));
+    const checked = optionLocator.locator('[aria-checked="true"]').first();
+    const checkedText = normalizeText(await checked.innerText().catch(() => ""));
+
+    const slider = page
+      .locator(INTELLIGENCE_EFFORT_SLIDER_SELECTOR)
+      .last();
+    const sliderAttached = (await slider.count().catch(() => 0)) > 0;
+    let effortCurrent: string | null = null;
+    let effortOptions: string[] = [];
+    if (sliderAttached) {
+      const rawMin = await slider.getAttribute("aria-valuemin").catch(() => null);
+      const rawMax = await slider.getAttribute("aria-valuemax").catch(() => null);
+      const rawNow = await slider.getAttribute("aria-valuenow").catch(() => null);
+      const valueText = await slider.getAttribute("aria-valuetext").catch(() => null);
+      const min = rawMin !== null ? Number(rawMin) : NaN;
+      const max = rawMax !== null ? Number(rawMax) : NaN;
+      const now = rawNow !== null ? Number(rawNow) : NaN;
+      if (
+        Number.isInteger(min) &&
+        Number.isInteger(max) &&
+        max >= min &&
+        max - min < 10
+      ) {
+        effortOptions = Array.from({ length: max - min + 1 }, (_, index) =>
+          String(min + index)
+        );
+      }
+      effortCurrent =
+        valueText?.trim() ||
+        (Number.isInteger(now) ? String(now) : null);
+    }
+
+    return {
+      modelPicker: {
+        found: true,
+        current: checkedText || controlText || null,
+        options: modelOptions,
+      },
+      effortPicker: {
+        found: sliderAttached,
+        current: effortCurrent,
+        options: effortOptions,
+      },
+      flattenedPicker: true,
+    };
+  } finally {
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+}
+
 async function selectExact(
   page: Page,
   selectors: readonly string[],
   label: string,
   code: "MODEL_UNAVAILABLE" | "EFFORT_UNAVAILABLE"
 ): Promise<void> {
-  const button = await firstVisible(page, selectors);
+  const form = await composerForm(page);
+  const button = await firstVisibleWithin(form, selectors);
   if (!button) {
     throw new ChatGptWebError(
       "UI_CHANGED",
@@ -424,6 +536,16 @@ export class ChatGptWebClient {
       await this.navigate(page);
     }
     await this.requireComposer(page);
+
+    const form = await composerForm(page);
+    const intelligenceButton = await firstVisibleWithin(
+      form,
+      INTELLIGENCE_PICKER_SELECTORS
+    );
+    if (intelligenceButton) {
+      return modernIntelligenceCapabilities(page, intelligenceButton);
+    }
+
     const modelPicker = await pickerInfo(page, MODEL_PICKER_SELECTORS);
     const effortPicker = await pickerInfo(page, EFFORT_PICKER_SELECTORS);
     return {
