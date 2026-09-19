@@ -379,9 +379,9 @@ program
 
 program
   .command("codex-config")
-  .description("Print the Codex config.toml MCP block for this build")
+  .description("Print the Codex config.toml MCP block for this installed build")
   .action(() => {
-    const cliPath = fileURLToPath(import.meta.url);
+    const binPath = fileURLToPath(new URL("../bin/cgw.mjs", import.meta.url));
     const nodePath = process.execPath;
     const toml = (value: string): string =>
       value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
@@ -390,7 +390,7 @@ program
       [
         "[mcp_servers.chatgpt_web]",
         "command = \"" + toml(nodePath) + "\"",
-        "args = [\"" + toml(cliPath) + "\", \"mcp\"]",
+        "args = [\"" + toml(binPath) + "\", \"mcp\"]",
         "startup_timeout_sec = 30",
         "tool_timeout_sec = 600",
       ].join("\n")
