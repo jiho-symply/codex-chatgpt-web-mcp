@@ -209,6 +209,17 @@ function isProfileBusyError(message: string): boolean {
   return /already in use|profile.*use/i.test(message);
 }
 
+export function systemCdpLaunchArgs(profileDir: string, port: number): string[] {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error("System-CDP requires a fixed non-zero TCP port.");
+  }
+  return [
+    "--user-data-dir=" + profileDir,
+    "--remote-debugging-port=" + port,
+    CHATGPT_ORIGIN,
+  ];
+}
+
 async function freeLoopbackPort(preferred?: number): Promise<number> {
   if (preferred) return preferred;
   return new Promise<number>((resolve, reject) => {
@@ -289,11 +300,7 @@ export class BrowserRuntime {
       }
 
       const port = await freeLoopbackPort(this.config.cdpPort);
-      const args = [
-        "--user-data-dir=" + this.config.profileDir,
-        "--remote-debugging-port=" + port,
-        CHATGPT_ORIGIN,
-      ];
+      const args = systemCdpLaunchArgs(this.config.profileDir, port);
 
 
       const child = spawn(candidate.executablePath, args, {
