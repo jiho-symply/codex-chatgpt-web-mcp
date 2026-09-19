@@ -154,21 +154,33 @@ async function selectionLooksProjectOnly(scope: Locator): Promise<boolean> {
   return false;
 }
 
-async function selectProjectOnlyMemory(page: Page, dialog: Locator): Promise<void> {
-  let option = await visibleProjectOnly(dialog);
+async function newestVisibleSettingsScope(page: Page, fallback: Locator): Promise<Locator> {
+  const dialogs = page.getByRole("dialog");
+  const count = await dialogs.count().catch(() => 0);
+  for (let i = count - 1; i >= 0; i--) {
+    const dialog = dialogs.nth(i);
+    if (await dialog.isVisible().catch(() => false)) return dialog;
+  }
+  return fallback;
+}
+
+async function selectProjectOnlyMemory(page: Page, initialScope: Locator): Promise<Locator> {
+  let scope = initialScope;
+  let option = await visibleProjectOnly(scope);
 
   if (!option) {
-    const more = dialog.getByRole("button", { name: MORE_OPTIONS_LABEL }).first();
+    const more = scope.getByRole("button", { name: MORE_OPTIONS_LABEL }).first();
     if (await more.isVisible().catch(() => false)) {
-      await more.click();
+      await more.press("Enter").catch(() => more.click({ force: true }));
       await page.waitForTimeout(150);
-      option = await visibleProjectOnly(dialog);
+      scope = await newestVisibleSettingsScope(page, scope);
+      option = await visibleProjectOnly(scope);
     }
   }
 
   if (!option) {
-    const memoryButton = dialog.getByRole("button", { name: /memory|메모리/i }).first();
-    const memoryCombo = dialog.getByRole("combobox", { name: /memory|메모리/i }).first();
+    const memoryButton = scope.getByRole("button", { name: /memory|메모리/i }).first();
+    const memoryCombo = scope.getByRole("combobox", { name: /memory|메모리/i }).first();
     const control = (await memoryButton.isVisible().catch(() => false))
       ? memoryButton
       : (await memoryCombo.isVisible().catch(() => false))
@@ -176,32 +188,38 @@ async function selectProjectOnlyMemory(page: Page, dialog: Locator): Promise<voi
         : null;
 
     if (control) {
-      await control.click();
+      await control.press("Enter").catch(() => control.click({ force: true }));
       await page.waitForTimeout(150);
       const overlay = await activeChoiceOverlay(page);
-      if (overlay) option = await visibleProjectOnly(overlay);
+      if (overlay) {
+        const overlayOption = await visibleProjectOnly(overlay);
+        if (overlayOption) {
+          option = overlayOption;
+        }
+      }
     }
   }
 
   if (!option) {
     throw new WorkspaceProjectError(
       "PROJECT_MEMORY_UNAVAILABLE",
-      "Project settings did not expose Project-only memory."
+      "The Project creation/settings UI did not expose Project-only memory."
     );
   }
 
-  await option.click();
+  await option.press("Enter").catch(() => option!.click({ force: true }));
   await page.waitForTimeout(150);
 
-  if (!(await selectionLooksProjectOnly(dialog))) {
+  if (!(await selectionLooksProjectOnly(scope))) {
     const overlay = await activeChoiceOverlay(page);
     if (!overlay || !(await selectionLooksProjectOnly(overlay))) {
       throw new WorkspaceProjectError(
         "PROJECT_MEMORY_UNVERIFIED",
-        "Project-only memory could not be confirmed before Project creation."
+        "Project-only memory could not be confirmed before continuing."
       );
     }
   }
+  return scope;
 }
 
 function canonicalProjectIdFromHref(href: string | null): string | null {
@@ -982,7 +1000,29 @@ export class WorkspaceProjectManager {
         );
       }
 
-      await nameInput.press("Enter");
+      // Current ChatGPT Projects UI exposes Memory during creation. Select and
+      // verify Project-only BEFORE committing the new Project; existing-project
+      // Memory can be locked in the current UI rollout.
+      const creationScope = await waitForProjectCreationScope(page);
+      const verifiedCreationScope = await selectProjectOnlyMemory(page, creationScope);
+
+      let create = verifiedCreationScope
+        .getByRole("button", { name: CREATE_PROJECT_LABEL })
+        .last();
+      if (!(await create.isVisible().catch(() => false))) {
+        create = verifiedCreationScope.locator('button[type="submit"]').last();
+      }
+      if (await create.isVisible().catch(() => false)) {
+        if (!(await create.isEnabled().catch(() => false))) {
+          throw new WorkspaceProjectError(
+            "PROJECT_CREATE_FAILED",
+            "Project create button is disabled after selecting Project-only memory."
+          );
+        }
+        await create.press("Enter").catch(() => create.click({ force: true }));
+      } else {
+        await nameInput.press("Enter");
+      }
 
       const deadline = Date.now() + 15_000;
       while (Date.now() < deadline) {
@@ -996,11 +1036,28 @@ export class WorkspaceProjectManager {
           "Project creation did not land on a verifiable Project with a usable composer."
         );
       }
+
+      const now = new Date().toISOString();
+      const ready: WorkspaceProjectBinding = {
+        workspaceId,
+        workspaceName: workspaceName ?? null,
+        namingMode,
+        projectId,
+        projectName,
+        projectUrl: projectHomeUrl(projectId),
+        memoryMode: "project-only",
+        memoryVerifiedAt: now,
+        memoryVerificationSource: "creation",
+        status: "ready",
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.store.upsert(ready);
+      return ready;
     }
 
-    // Persist the remote identity before touching Project settings. If the
-    // settings UI drifts, the next retry resumes this exact Project instead of
-    // creating another duplicate.
+    // Recovery path for an older build that created a Project before CGW began
+    // selecting Project-only memory during creation. Keep it fail-closed.
     const pendingNow = new Date().toISOString();
     const priorPending = this.store.find(workspaceId);
     this.store.upsert({
